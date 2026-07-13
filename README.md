@@ -1,0 +1,105 @@
+# Aegis - Security Control Plane for AI Agents
+
+Aegis is a multi-tenant gateway that sits between AI agents and external tools. Its job is to make every tool invocation prove its authority instead of trusting a plausible agent request. The Milestone 0 slice in this repository starts the production shape: a Go gateway, PostgreSQL schema, dependency-aware health checks, structured logs, OpenTelemetry wiring, local Docker Compose stack, policy seed, and the first delegated-authorization domain tests.
+
+## Architecture
+
+```mermaid
+flowchart LR
+  client["AI Agent / MCP Client / REST Client"] --> gateway["Aegis Gateway"]
+  gateway --> authn["Authentication"]
+  authn --> delegation["Delegation Validation"]
+  delegation --> policy["OPA Decision"]
+  policy --> approval["Approval Engine"]
+  approval --> budget["Budget Ledger"]
+  budget --> creds["Credential Broker"]
+  creds --> tool["Downstream MCP Tool"]
+  gateway --> audit["Tamper-Evident Audit Log"]
+  gateway --> outbox["Transactional Outbox"]
+```
+
+The data plane is the latency-sensitive path through the gateway. The control plane manages tools, policies, delegations, budgets, approvals, credentials, and audit exploration. Background workers will drain the transactional outbox, expire approvals, reconcile unknown outcomes, and generate audit roots.
+
+## One-Command Local Startup
+
+```sh
+make bootstrap
+make up
+make migrate
+make seed
+```
+
+The local stack includes PostgreSQL, Redis, NATS JetStream, OPA, Keycloak, OpenBao, OpenTelemetry Collector, Prometheus, Grafana, and the gateway.
+
+## Demo Credentials
+
+Development-only credentials are kept in `.env.example`:
+
+- PostgreSQL: `aegis` / `aegis_dev_password`
+- Keycloak admin: `admin` / `admin`
+- OpenBao dev token: `dev-root-token`
+- Grafana admin: `admin` / `admin`
+
+Never use these outside local development.
+
+## Curl Examples
+
+```sh
+curl -fsS http://localhost:8080/live
+curl -fsS http://localhost:8080/ready
+curl -fsS http://localhost:8080/metrics
+curl -fsS http://localhost:8080/.well-known/oauth-protected-resource
+curl -fsS "http://localhost:8080/v1/tools?tenant_id=tenant_acme"
+```
+
+The gateway includes a deterministic local invocation engine for development and tests. Readiness fails closed if PostgreSQL is unavailable. When `AEGIS_AUTH_ENABLED=true`, protected routes such as `/v1/whoami`, `/v1/invocations`, and `/mcp` require a valid JWT.
+
+## MCP Client Configuration
+
+The Streamable HTTP MCP endpoint is reserved at:
+
+```json
+{
+  "mcpServers": {
+    "aegis": {
+      "url": "http://localhost:8080/mcp",
+      "headers": {
+        "Authorization": "Bearer <access-token>"
+      }
+    }
+  }
+}
+```
+
+MCP `tools/list` and `tools/call` are planned for Milestone 2 and will route through the same invocation pipeline as REST.
+
+## Approval Walkthrough
+
+Seed data includes an Acme refund delegation with a maximum automatic amount of `1000000` paise. The initial Rego policy allows refunds at or below that threshold and requires two finance approvals above it. The approval API and state machine are implemented in Milestone 5.
+
+Run the local demo script after the gateway is up:
+
+```sh
+make demo
+```
+
+The script submits a low-risk refund, submits a high-value refund, applies two finance approvals, and verifies the audit chain.
+
+## Audit Verification
+
+The schema includes hash-chained `audit_events` and `audit_roots`. The `cmd/audit-verifier` binary currently proves PostgreSQL connectivity; full hash-chain verification is scheduled for Milestone 7.
+
+## Test Commands
+
+```sh
+make test
+make test-policy
+make test-race
+make test-integration
+```
+
+The integration test expects `AEGIS_TEST_DATABASE_URL` or the `DATABASE_URL` Makefile variable to point at a running PostgreSQL database.
+
+## Current Limitations
+
+This is a deterministic local vertical slice, not yet a complete distributed production deployment. JWT validation, tenant-aware protected route wiring, local policy decisions, risk scoring, budget reservations, approvals, scoped credentials, demo execution, idempotency, audit-chain verification, policy simulation, and an admin UI source tree exist. PostgreSQL-backed persistence for every subsystem, Redis-backed distributed rate limits, NATS publishing, OpenBao runtime integration, OPA HTTP evaluation from the gateway, and complete Keycloak claim mapping still need hardening.

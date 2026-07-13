@@ -1,0 +1,15 @@
+DROP TABLE IF EXISTS audit_roots;
+DROP TABLE IF EXISTS audit_events;
+DROP TABLE IF EXISTS outbox_events;
+DROP TABLE IF EXISTS budget_ledger_entries;
+DROP TABLE IF EXISTS budgets;
+DROP TABLE IF EXISTS approval_decisions;
+DROP TABLE IF EXISTS approval_requests;
+DROP INDEX IF EXISTS invocations_idempotency_key_uniq;
+DROP TABLE IF EXISTS invocations;
+DROP TABLE IF EXISTS tool_versions;
+DROP TABLE IF EXISTS tools;
+DROP TABLE IF EXISTS delegation_grants;
+DROP TABLE IF EXISTS agents;
+DROP TABLE IF EXISTS subjects;
+DROP TABLE IF EXISTS tenants;

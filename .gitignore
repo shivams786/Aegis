@@ -1,0 +1,6 @@
+bin/
+coverage.out
+admin/node_modules/
+admin/dist/
+*.log
+.env

@@ -1,0 +1,177 @@
+openapi: 3.1.0
+info:
+  title: Aegis Security Control Plane API
+  version: 0.1.0
+  summary: Gateway, control-plane, and audit APIs for secure AI-agent tool invocation.
+servers:
+  - url: http://localhost:8080
+paths:
+  /live:
+    get:
+      summary: Process liveness.
+      responses:
+        "200":
+          description: Process is running.
+  /ready:
+    get:
+      summary: Dependency-aware readiness.
+      responses:
+        "200":
+          description: Required dependencies are available.
+        "503":
+          description: A required dependency is unavailable.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /metrics:
+    get:
+      summary: Prometheus metrics.
+      responses:
+        "200":
+          description: Prometheus text exposition.
+  /v1/invocations:
+    post:
+      summary: Submit a normalized tool invocation.
+      parameters:
+        - name: Idempotency-Key
+          in: header
+          required: true
+          schema:
+            type: string
+            minLength: 8
+            maxLength: 200
+      responses:
+        "202":
+          description: Invocation accepted or pending approval.
+        "403":
+          description: Invocation denied.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+        "501":
+          description: Reserved in Milestone 0 implementation.
+  /v1/whoami:
+    get:
+      summary: Return the authenticated Aegis acting identity.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Acting identity extracted from the validated JWT.
+        "401":
+          description: Missing or invalid bearer token.
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/Problem"
+  /v1/invocations/{invocation_id}:
+    get:
+      summary: Read invocation status without exposing cross-tenant existence.
+      parameters:
+        - name: invocation_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Invocation status.
+        "404":
+          description: Generic not found.
+        "501":
+          description: Reserved in Milestone 0 implementation.
+  /v1/approvals:
+    get:
+      summary: List pending approval requests.
+      security:
+        - bearerAuth: []
+      responses:
+        "200":
+          description: Approval inbox.
+  /v1/approvals/{approval_request_id}/approve:
+    post:
+      summary: Approve a pending invocation.
+      parameters:
+        - name: approval_request_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Approval accepted or invocation executed after final approval.
+        "403":
+          description: Approval rejected by separation-of-duties or group rules.
+  /v1/approvals/{approval_request_id}/reject:
+    post:
+      summary: Reject a pending invocation.
+      parameters:
+        - name: approval_request_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Invocation rejected.
+  /v1/tools:
+    get:
+      summary: List active tools available to the caller.
+      responses:
+        "200":
+          description: Tool list filtered by tenant and scopes.
+  /v1/audit/events:
+    get:
+      summary: List tenant audit events.
+      responses:
+        "200":
+          description: Audit event list.
+  /v1/audit/verify:
+    post:
+      summary: Verify tenant audit chain.
+      responses:
+        "200":
+          description: Audit chain verifies.
+        "409":
+          description: Audit chain verification failed.
+  /mcp:
+    post:
+      summary: Streamable HTTP MCP endpoint.
+      responses:
+        "200":
+          description: JSON-RPC MCP response.
+  /.well-known/oauth-protected-resource:
+    get:
+      summary: OAuth protected-resource metadata for MCP HTTP deployment.
+      responses:
+        "200":
+          description: Protected resource metadata.
+components:
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+  schemas:
+    Problem:
+      type: object
+      required:
+        - type
+        - title
+        - status
+        - detail
+        - reason_code
+      properties:
+        type:
+          type: string
+          format: uri
+        title:
+          type: string
+        status:
+          type: integer
+        detail:
+          type: string
+        reason_code:
+          type: string

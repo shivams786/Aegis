@@ -1,0 +1,42 @@
+{
+  "realm": "aegis",
+  "enabled": true,
+  "clients": [
+    {
+      "clientId": "aegis-gateway",
+      "enabled": true,
+      "publicClient": false,
+      "protocol": "openid-connect",
+      "redirectUris": [
+        "http://localhost:8080/*"
+      ],
+      "webOrigins": [
+        "http://localhost:8080"
+      ]
+    },
+    {
+      "clientId": "refund-agent-client",
+      "enabled": true,
+      "publicClient": true,
+      "protocol": "openid-connect"
+    }
+  ],
+  "roles": {
+    "realm": [
+      {
+        "name": "refund_operator"
+      },
+      {
+        "name": "approval_operator"
+      }
+    ]
+  },
+  "groups": [
+    {
+      "name": "support"
+    },
+    {
+      "name": "finance"
+    }
+  ]
+}
