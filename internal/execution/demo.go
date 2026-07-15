@@ -66,6 +66,10 @@ func (e *DemoExecutor) Execute(ctx context.Context, req invocation.Request, tool
 	}
 }
 
+func (e *DemoExecutor) ReconcilePaymentByIdempotencyKey(tenantID, key string) (map[string]any, bool) {
+	return e.payments.ReconcileByIdempotencyKey(tenantID, key)
+}
+
 type PaymentsServer struct {
 	mu          sync.Mutex
 	credential credentials.Provider

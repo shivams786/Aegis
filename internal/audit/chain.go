@@ -30,6 +30,16 @@ type Chain struct {
 	now    func() time.Time
 }
 
+type Root struct {
+	TenantID       string    `json:"tenant_id"`
+	RootID         string    `json:"root_id"`
+	FromSequenceNo int64     `json:"from_sequence_no"`
+	ToSequenceNo   int64     `json:"to_sequence_no"`
+	RootHash       string    `json:"root_hash"`
+	GeneratedAt    time.Time `json:"generated_at"`
+	Signature      string    `json:"signature"`
+}
+
 func NewChain() *Chain {
 	return &Chain{events: make(map[string][]Event), now: func() time.Time { return time.Now().UTC() }}
 }
@@ -67,9 +77,16 @@ func (c *Chain) Events(tenantID string) []Event {
 }
 
 func Verify(events []Event) error {
-	previousHash := ""
+	return VerifySegment(events, "", 1)
+}
+
+func VerifySegment(events []Event, previousHash string, expectedStartSequence int64) error {
+	if expectedStartSequence <= 0 {
+		return errors.New("expected start sequence must be positive")
+	}
 	for i, event := range events {
-		if event.SequenceNo != int64(i+1) {
+		expectedSequence := expectedStartSequence + int64(i)
+		if event.SequenceNo != expectedSequence {
 			return fmt.Errorf("audit sequence broken at index %d", i)
 		}
 		if event.PreviousHash != previousHash {
@@ -85,6 +102,45 @@ func Verify(events []Event) error {
 		previousHash = event.EventHash
 	}
 	return nil
+}
+
+func RootManifest(tenantID string, events []Event, signer string, generatedAt time.Time) (Root, error) {
+	if len(events) == 0 {
+		return Root{}, errors.New("cannot generate audit root for empty event set")
+	}
+	if generatedAt.IsZero() {
+		generatedAt = time.Now().UTC()
+	}
+	leafHashes := make([]any, 0, len(events))
+	for _, event := range events {
+		leafHashes = append(leafHashes, event.EventHash)
+	}
+	rootHash, err := canonical.Hash(map[string]any{
+		"tenant_id": tenantID,
+		"from": events[0].SequenceNo,
+		"to": events[len(events)-1].SequenceNo,
+		"leaf_hashes": leafHashes,
+	})
+	if err != nil {
+		return Root{}, err
+	}
+	signature, err := canonical.Hash(map[string]any{
+		"root_hash": rootHash,
+		"signer": signer,
+		"generated_at": generatedAt.Format(time.RFC3339Nano),
+	})
+	if err != nil {
+		return Root{}, err
+	}
+	return Root{
+		TenantID: tenantID,
+		RootID: fmt.Sprintf("root_%s_%d_%d", tenantID, events[0].SequenceNo, events[len(events)-1].SequenceNo),
+		FromSequenceNo: events[0].SequenceNo,
+		ToSequenceNo: events[len(events)-1].SequenceNo,
+		RootHash: rootHash,
+		GeneratedAt: generatedAt,
+		Signature: signature,
+	}, nil
 }
 
 func eventHash(event Event) (string, error) {

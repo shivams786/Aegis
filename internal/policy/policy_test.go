@@ -1,6 +1,7 @@
 package policy
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/aegis/aegis/internal/authn"
@@ -46,5 +47,12 @@ func TestLocalEvaluatorDeniesCrossTenantResource(t *testing.T) {
 	}
 	if decision.Allow {
 		t.Fatalf("expected cross-tenant denial, got %#v", decision)
+	}
+}
+
+func TestFailClosedDecisionIncludesDecisionID(t *testing.T) {
+	decision := FailClosedDecision(errors.New("opa unavailable"))
+	if decision.Decision != invocation.DecisionDeny || decision.DecisionID == "" {
+		t.Fatalf("expected traceable fail-closed denial, got %#v", decision)
 	}
 }

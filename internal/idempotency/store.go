@@ -55,6 +55,20 @@ func (s *Store) Complete(record Record, response invocation.Response) {
 	s.records[compoundKey(record.TenantID, record.ToolID, record.Action, record.Key)] = record
 }
 
+func (s *Store) CompleteKey(tenantID, toolID, action, key string, response invocation.Response) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	recordKey := compoundKey(tenantID, toolID, action, key)
+	record := s.records[recordKey]
+	record.TenantID = tenantID
+	record.ToolID = toolID
+	record.Action = action
+	record.Key = key
+	record.Response = response
+	record.Completed = true
+	s.records[recordKey] = record
+}
+
 func compoundKey(tenantID, toolID, action, key string) string {
 	return tenantID + "\x00" + toolID + "\x00" + action + "\x00" + key
 }

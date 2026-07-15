@@ -2,8 +2,10 @@ COMPOSE := docker compose -f deploy/docker-compose.yml --env-file .env
 POSTGRES_USER ?= aegis
 POSTGRES_DB ?= aegis
 DATABASE_URL ?= postgres://aegis:aegis_dev_password@localhost:5432/aegis?sslmode=disable
+AUDIT_EVENTS_FILE ?=
+AUDIT_TENANT ?= tenant_acme
 
-.PHONY: bootstrap up migrate seed test test-integration test-security test-race test-policy lint demo audit-verify admin-build load-test down
+.PHONY: bootstrap up migrate seed test test-integration test-security test-race test-policy lint demo demo-mcp-services audit-verify audit-verify-file admin-build load-test down
 
 bootstrap:
 	@test -f .env || cp .env.example .env
@@ -39,6 +41,9 @@ lint:
 demo:
 	powershell -ExecutionPolicy Bypass -File ./scripts/demo.ps1
 
+demo-mcp-services:
+	powershell -ExecutionPolicy Bypass -File ./scripts/demo-mcp-services.ps1
+
 admin-build:
 	npm install --prefix admin
 	npm run build --prefix admin
@@ -48,6 +53,9 @@ load-test:
 
 audit-verify:
 	go run ./cmd/audit-verifier
+
+audit-verify-file:
+	go run ./cmd/audit-verifier -file "$(AUDIT_EVENTS_FILE)" -tenant "$(AUDIT_TENANT)"
 
 down:
 	$(COMPOSE) down

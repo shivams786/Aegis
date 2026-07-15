@@ -18,7 +18,7 @@ flowchart LR
   gateway --> outbox["Transactional Outbox"]
 ```
 
-The data plane is the latency-sensitive path through the gateway. The control plane manages tools, policies, delegations, budgets, approvals, credentials, and audit exploration. Background workers will drain the transactional outbox, expire approvals, reconcile unknown outcomes, and generate audit roots.
+The data plane is the latency-sensitive path through the gateway. The control plane manages tools, policies, delegations, budgets, approvals, credentials, policy simulation runs, and audit exploration. Background workers drain the transactional outbox to NATS, expire stale approvals, release stale budget reservations, lease unknown-outcome invocations for reconciliation, lease and complete policy simulation summaries, and generate audit roots.
 
 ## One-Command Local Startup
 
@@ -50,9 +50,13 @@ curl -fsS http://localhost:8080/ready
 curl -fsS http://localhost:8080/metrics
 curl -fsS http://localhost:8080/.well-known/oauth-protected-resource
 curl -fsS "http://localhost:8080/v1/tools?tenant_id=tenant_acme"
+curl -fsS "http://localhost:8080/v1/policy/bundles?tenant_id=tenant_acme"
+curl -fsS "http://localhost:8080/v1/policy/simulations?tenant_id=tenant_acme"
 ```
 
 The gateway includes a deterministic local invocation engine for development and tests. Readiness fails closed if PostgreSQL is unavailable. When `AEGIS_AUTH_ENABLED=true`, protected routes such as `/v1/whoami`, `/v1/invocations`, and `/mcp` require a valid JWT.
+
+Seed data registers `local-policy-v1` as the active Acme bundle and a `candidate-demo` bundle for replay simulations. Policy bundle registration, activation, and simulation queueing are exposed through `/v1/policy/bundles` and `/v1/policy/simulations`; each mutation writes a redacted outbox event for asynchronous consumers.
 
 ## MCP Client Configuration
 
@@ -71,7 +75,7 @@ The Streamable HTTP MCP endpoint is reserved at:
 }
 ```
 
-MCP `tools/list` and `tools/call` are planned for Milestone 2 and will route through the same invocation pipeline as REST.
+MCP `tools/list` and `tools/call` route through the same invocation pipeline as REST, including schema validation, delegation checks, policy decisions, approvals, idempotency, budget handling, credential scoping, execution, and audit.
 
 ## Approval Walkthrough
 
@@ -87,7 +91,13 @@ The script submits a low-risk refund, submits a high-value refund, applies two f
 
 ## Audit Verification
 
-The schema includes hash-chained `audit_events` and `audit_roots`. The `cmd/audit-verifier` binary currently proves PostgreSQL connectivity; full hash-chain verification is scheduled for Milestone 7.
+The schema includes hash-chained `audit_events` and `audit_roots`. The `cmd/audit-verifier` binary can verify exported audit JSON offline, detect tampering, compare an expected root hash, and emit a root manifest:
+
+```sh
+go run ./cmd/audit-verifier -file ./audit-events.json -tenant tenant_acme -root-out ./audit-root.json
+```
+
+Without `-file`, the verifier keeps its deployment readiness behavior and checks PostgreSQL connectivity. See `docs/audit-verifier.md` for export formats and incident-response usage.
 
 ## Test Commands
 
@@ -102,4 +112,4 @@ The integration test expects `AEGIS_TEST_DATABASE_URL` or the `DATABASE_URL` Mak
 
 ## Current Limitations
 
-This is a deterministic local vertical slice, not yet a complete distributed production deployment. JWT validation, tenant-aware protected route wiring, local policy decisions, risk scoring, budget reservations, approvals, scoped credentials, demo execution, idempotency, audit-chain verification, policy simulation, and an admin UI source tree exist. PostgreSQL-backed persistence for every subsystem, Redis-backed distributed rate limits, NATS publishing, OpenBao runtime integration, OPA HTTP evaluation from the gateway, and complete Keycloak claim mapping still need hardening.
+This is a deterministic local vertical slice, not yet a complete distributed production deployment. JWT validation, tenant-aware protected route wiring, runtime-selectable OPA policy evaluation, Redis-backed rate-limit checks, OpenBao-backed scoped credentials, local policy decisions, risk scoring, budget reservations, approvals, demo execution, idempotency, audit-chain verification, policy bundle registration, policy simulation summary completion, PostgreSQL outbox producers for API outcomes, NATS outbox publishing, and an admin UI source tree exist. PostgreSQL-backed persistence for every subsystem, full candidate-vs-baseline OPA replay, and complete Keycloak claim mapping still need hardening.

@@ -1,6 +1,7 @@
 package ratelimit
 
 import (
+	"context"
 	"errors"
 	"testing"
 	"time"
@@ -21,5 +22,13 @@ func TestLimiterReturnsRetryMetadata(t *testing.T) {
 	}
 	if decision.RetryAfter <= 0 {
 		t.Fatalf("expected retry metadata, got %#v", decision)
+	}
+}
+
+func TestRedisLimiterFailsClosedInStrictMode(t *testing.T) {
+	limiter := RedisLimiter{Addr: "127.0.0.1:1", Timeout: 10 * time.Millisecond}
+	_, err := limiter.Check(context.Background(), "key", Rule{Limit: 1, Window: time.Minute, Strict: true})
+	if err == nil {
+		t.Fatal("expected strict Redis limiter to fail closed")
 	}
 }

@@ -3,6 +3,7 @@ package policy
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"time"
@@ -34,6 +35,29 @@ type ApprovalObligation struct {
 	RequesterMayApprove bool          `json:"requester_may_approve"`
 	ExpiresIn           time.Duration `json:"expires_in"`
 	ReasonRequired      bool          `json:"reason_required"`
+}
+
+func (o *ApprovalObligation) UnmarshalJSON(data []byte) error {
+	var raw struct {
+		RequiredApprovals   int           `json:"required_approvals"`
+		RequiredGroup       string        `json:"required_group"`
+		RequesterMayApprove bool          `json:"requester_may_approve"`
+		ExpiresIn           time.Duration `json:"expires_in"`
+		ExpiresInSeconds    int64         `json:"expires_in_seconds"`
+		ReasonRequired      bool          `json:"reason_required"`
+	}
+	if err := json.Unmarshal(data, &raw); err != nil {
+		return err
+	}
+	o.RequiredApprovals = raw.RequiredApprovals
+	o.RequiredGroup = raw.RequiredGroup
+	o.RequesterMayApprove = raw.RequesterMayApprove
+	o.ExpiresIn = raw.ExpiresIn
+	if o.ExpiresIn <= 0 && raw.ExpiresInSeconds > 0 {
+		o.ExpiresIn = time.Duration(raw.ExpiresInSeconds) * time.Second
+	}
+	o.ReasonRequired = raw.ReasonRequired
+	return nil
 }
 
 type CredentialObligation struct {
@@ -74,9 +98,6 @@ func (e LocalEvaluator) Evaluate(req invocation.Request, tool tools.Definition, 
 		PolicyVer:   e.Version,
 		EvaluatedAt: now,
 	}
-	defer func() {
-		decision.DecisionID = decisionID(decision)
-	}()
 
 	if !tool.Active {
 		decision.ReasonCodes = []string{"TOOL_DISABLED"}
@@ -178,11 +199,12 @@ func (FailingEvaluator) Evaluate(invocation.Request, tools.Definition, risk.Resu
 }
 
 func FailClosedDecision(err error) Decision {
-	return Decision{
+	decision := Decision{
 		Allow:       false,
 		Decision:    invocation.DecisionDeny,
 		ReasonCodes: []string{"POLICY_UNAVAILABLE_FAIL_CLOSED", fmt.Sprintf("POLICY_ERROR_%T", err)},
 		PolicyVer:   LocalPolicyVersion,
 		EvaluatedAt: time.Now().UTC(),
 	}
+	return withID(decision)
 }

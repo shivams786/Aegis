@@ -6,9 +6,13 @@ The data plane receives REST and MCP requests, authenticates the caller, resolve
 
 The control plane owns durable configuration: tools, tool versions, policy bundles, delegation grants, budgets, approval rules, credential templates, and audit exploration. The gateway must be able to serve the data plane without relying on an administrator UI.
 
-Background workers handle tasks that should not be coupled to request latency: outbox delivery, approval expiry, stale reservation cleanup, reconciliation of unknown downstream outcomes, audit-root generation, and policy simulation replay.
+Policy bundles are registered durably before rollout. Each tenant can have only one active bundle, activation retires the previous active bundle, and registration/activation both emit redacted outbox events. Simulation runs store baseline and proposed version/hash pairs so replay work can be leased asynchronously without exposing sampled invocation bodies in the control-plane event stream.
 
-The current development build also includes a deterministic local engine. It is intentionally wired behind the same REST and MCP entry points so local demos can exercise authorization, risk, policy, budgets, approvals, scoped credentials, execution, idempotency, and audit without requiring external credentials. Production deployments should replace the local in-memory stores with PostgreSQL, Redis, NATS, OPA, and OpenBao adapters behind the same domain contracts.
+Background workers handle tasks that should not be coupled to request latency: outbox delivery, approval expiry, stale reservation cleanup, reconciliation of unknown downstream outcomes, audit-root generation, and policy simulation replay. The current worker drains PostgreSQL outbox rows to NATS, expires stale approvals, releases stale budget reservations, leases persisted unknown-outcome invocations for reconciliation, leases policy simulation replay work, persists redacted simulation summaries, and generates audit roots.
+
+The current development build also includes a deterministic local engine. It is intentionally wired behind the same REST and MCP entry points so local demos can exercise authorization, risk, policy, budgets, approvals, scoped credentials, execution, idempotency, and audit without requiring external credentials. OPA policy evaluation, Redis rate-limit checks, and OpenBao scoped credentials can be selected at runtime with sidecar environment variables; production deployments should continue replacing the remaining local in-memory stores with PostgreSQL-backed repositories and NATS-backed workers behind the same domain contracts.
+
+Gateway API handlers now enqueue redacted invocation outcome events into the PostgreSQL outbox after local-engine state changes. This gives the NATS worker a real producer path for demos and integration work, but production persistence should still move state mutation and outbox insertion into the same PostgreSQL transaction.
 
 ## Request Lifecycle
 

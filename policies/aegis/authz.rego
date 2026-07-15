@@ -8,6 +8,7 @@ default decision = {
 
 decision = result {
   input.delegation.valid == true
+  tenant_resource_match
   input.tool.active == true
   input.tool.side_effect == "READ_ONLY"
   input.risk.score < 50
@@ -20,6 +21,7 @@ decision = result {
 
 decision = result {
   input.delegation.valid == true
+  tenant_resource_match
   input.tool.active == true
   input.tool.id == "payments.refund"
   input.arguments.amount_minor <= 1000000
@@ -33,6 +35,7 @@ decision = result {
 
 decision = result {
   input.delegation.valid == true
+  tenant_resource_match
   input.tool.active == true
   input.tool.id == "payments.refund"
   input.arguments.amount_minor > 1000000
@@ -47,4 +50,8 @@ decision = result {
       "expires_in_seconds": 3600,
     },
   }
+}
+
+tenant_resource_match {
+  input.invocation.tenant_id == input.invocation.resource.owner_tenant_id
 }

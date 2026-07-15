@@ -14,7 +14,10 @@ import (
 	"github.com/aegis/aegis/internal/authn"
 	"github.com/aegis/aegis/internal/config"
 	"github.com/aegis/aegis/internal/core"
+	"github.com/aegis/aegis/internal/credentials"
 	"github.com/aegis/aegis/internal/observability"
+	"github.com/aegis/aegis/internal/policy"
+	"github.com/aegis/aegis/internal/ratelimit"
 	"github.com/aegis/aegis/internal/storage"
 )
 
@@ -71,6 +74,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
+	configureEngineAdapters(cfg, logger, engine)
 
 	server := &http.Server{
 		Addr:              cfg.HTTPAddr,
@@ -103,4 +107,37 @@ func run() error {
 	}
 	logger.Info("gateway stopped")
 	return nil
+}
+
+func configureEngineAdapters(cfg config.Config, logger *slog.Logger, engine *core.Engine) {
+	if cfg.Sidecars.OPA.URL != "" {
+		engine.SetPolicyEvaluator(policy.OPAEvaluator{
+			BaseURL:       cfg.Sidecars.OPA.URL,
+			DecisionPath:  cfg.Sidecars.OPA.DecisionPath,
+			PolicyHash:    cfg.Sidecars.OPA.PolicyHash,
+			PolicyVersion: cfg.Sidecars.OPA.PolicyVersion,
+			Client:        &http.Client{Timeout: cfg.Sidecars.OPA.Timeout},
+			Timeout:       cfg.Sidecars.OPA.Timeout,
+		})
+		logger.Info("opa policy evaluator enabled", "decision_path", cfg.Sidecars.OPA.DecisionPath)
+	}
+	if cfg.Sidecars.Redis.Addr != "" {
+		engine.SetDistributedRateLimiter(ratelimit.RedisLimiter{
+			Addr:    cfg.Sidecars.Redis.Addr,
+			Prefix:  cfg.Sidecars.Redis.Prefix,
+			Timeout: time.Second,
+		})
+		logger.Info("redis rate limiter enabled")
+	}
+	if cfg.Sidecars.OpenBao.Address != "" && cfg.Sidecars.OpenBao.Token != "" {
+		engine.SetCredentialProvider(credentials.OpenBaoProvider{
+			Address: cfg.Sidecars.OpenBao.Address,
+			Token:   cfg.Sidecars.OpenBao.Token,
+			Mount:   cfg.Sidecars.OpenBao.Mount,
+			Client:  &http.Client{Timeout: 5 * time.Second},
+		})
+		logger.Info("openbao credential provider enabled", "mount", cfg.Sidecars.OpenBao.Mount)
+	} else if cfg.Sidecars.OpenBao.Address != "" {
+		logger.Warn("openbao address configured without token; using local memory credential provider")
+	}
 }

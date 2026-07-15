@@ -28,8 +28,9 @@ type Engine struct {
 	policy      policy.Evaluator
 	budgets     *budget.Ledger
 	limits      *ratelimit.Limiter
+	redisLimits *ratelimit.RedisLimiter
 	approvals   *approval.Store
-	credentials *credentials.MemoryProvider
+	credentials credentials.Provider
 	executor    *execution.DemoExecutor
 	audit       *audit.Chain
 	idempotency *idempotency.Store
@@ -79,6 +80,29 @@ func NewDemoEngine() (*Engine, error) {
 
 func (e *Engine) ListTools(tenantID string, scopes []string) []tools.Definition {
 	return e.registry.List(tenantID, scopes)
+}
+
+func (e *Engine) RegisterTool(def tools.Definition) (tools.Definition, error) {
+	return e.registry.Register(def)
+}
+
+func (e *Engine) SetPolicyEvaluator(evaluator policy.Evaluator) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.policy = evaluator
+}
+
+func (e *Engine) SetDistributedRateLimiter(limiter ratelimit.RedisLimiter) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.redisLimits = &limiter
+}
+
+func (e *Engine) SetCredentialProvider(provider credentials.Provider) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.credentials = provider
+	e.executor = execution.NewDemoExecutor(provider)
 }
 
 func (e *Engine) Submit(ctx context.Context, req invocation.Request) (invocation.Response, error) {
@@ -163,13 +187,35 @@ func (e *Engine) Approve(ctx context.Context, tenantID, approvalID string, appro
 	if err != nil || currentTool.SchemaHash != rec.Request.Tool.SchemaHash {
 		resp := e.response(rec.Request.InvocationID, invocation.StateDenied, invocation.DecisionDeny, []string{"STALE_APPROVAL_TOOL_CHANGED"}, "", nil)
 		e.updateRecord(rec, resp)
+		e.completeIdempotency(rec, resp)
 		return resp, nil
 	}
-	result, err := e.executeAllowed(ctx, rec.Request, rec.Tool, rec.Risk, rec.Policy)
+	riskResult := risk.Calculate(rec.Request, currentTool, risk.Context{HourUTC: e.now().UTC().Hour()})
+	policyDecision, err := e.policy.Evaluate(rec.Request, currentTool, riskResult)
+	if err != nil {
+		policyDecision = policy.FailClosedDecision(err)
+	}
+	if policyDecision.Decision == invocation.DecisionDeny {
+		resp := e.response(rec.Request.InvocationID, invocation.StateDenied, invocation.DecisionDeny, append([]string{"POST_APPROVAL_POLICY_DENIED"}, policyDecision.ReasonCodes...), "", nil)
+		e.updateRecord(rec, resp)
+		e.completeIdempotency(rec, resp)
+		_, _ = e.audit.Append(rec.Request.TenantID, rec.Request.InvocationID, "POST_APPROVAL_DENIED", "policy", "aegis-policy", firstReason(resp.ReasonCodes), map[string]any{"policy_decision_id": policyDecision.DecisionID})
+		return resp, nil
+	}
+	if policyDecision.Decision == invocation.DecisionRequireApproval && policyDecision.Approval != nil && policyDecision.Approval.RequiredApprovals > approvalRequest.RequiredApprovals {
+		resp := e.response(rec.Request.InvocationID, invocation.StatePendingApproval, invocation.DecisionRequireApproval, []string{"POST_APPROVAL_POLICY_REQUIRES_MORE_APPROVALS"}, approvalID, nil)
+		e.updateRecord(rec, resp)
+		return resp, nil
+	}
+	rec.Risk = riskResult
+	rec.Policy = policyDecision
+	result, reservationID, err := e.executeAllowed(ctx, rec.Request, currentTool, riskResult, policyDecision)
 	if err != nil {
 		return invocation.Response{}, err
 	}
+	rec.BudgetReservationID = reservationID
 	e.updateRecord(rec, result)
+	e.completeIdempotency(rec, result)
 	return result, nil
 }
 
@@ -186,6 +232,7 @@ func (e *Engine) Reject(tenantID, approvalID string, approver authn.Subject, rea
 	}
 	resp := e.response(rec.Request.InvocationID, invocation.StateDenied, invocation.DecisionDeny, []string{"APPROVAL_REJECTED"}, approvalID, nil)
 	e.updateRecord(rec, resp)
+	e.completeIdempotency(rec, resp)
 	return resp, nil
 }
 
@@ -199,6 +246,42 @@ func (e *Engine) PendingApprovals(tenantID string) []approval.Request {
 
 func (e *Engine) VerifyAudit(tenantID string) error {
 	return audit.Verify(e.audit.Events(tenantID))
+}
+
+func (e *Engine) AuditRoot(tenantID string) (audit.Root, error) {
+	return audit.RootManifest(tenantID, e.audit.Events(tenantID), "aegis-dev-signer", e.now())
+}
+
+func (e *Engine) Reconcile(ctx context.Context, tenantID, invocationID string) (invocation.Response, error) {
+	e.mu.Lock()
+	rec := e.findByInvocationLocked(tenantID, invocationID)
+	e.mu.Unlock()
+	if rec == nil {
+		return invocation.Response{}, errors.New("invocation not found")
+	}
+	if rec.Response.State != invocation.StateReconciliationRequired {
+		return rec.Response, nil
+	}
+	if rec.Tool.ID != "payments.refund" {
+		resp := e.response(rec.Request.InvocationID, invocation.StateFailed, invocation.DecisionAllow, []string{"RECONCILIATION_UNSUPPORTED"}, "", nil)
+		e.updateRecord(rec, resp)
+		e.completeIdempotency(rec, resp)
+		return resp, nil
+	}
+	refund, ok := e.executor.ReconcilePaymentByIdempotencyKey(rec.Request.TenantID, rec.Request.IdempotencyKey)
+	if !ok {
+		resp := e.response(rec.Request.InvocationID, invocation.StateReconciliationRequired, invocation.DecisionAllow, []string{"RECONCILIATION_STILL_PENDING"}, "", nil)
+		e.updateRecord(rec, resp)
+		return resp, nil
+	}
+	if rec.BudgetReservationID != "" {
+		_ = e.budgets.Commit(rec.BudgetReservationID)
+	}
+	resp := e.response(rec.Request.InvocationID, invocation.StateSucceeded, invocation.DecisionAllow, []string{"RECONCILIATION_CONFIRMED_SUCCESS"}, "", refund)
+	e.updateRecord(rec, resp)
+	e.completeIdempotency(rec, resp)
+	_, _ = e.audit.Append(rec.Request.TenantID, rec.Request.InvocationID, "RECONCILIATION_SUCCEEDED", "worker", "aegis-reconciler", "RECONCILIATION_CONFIRMED_SUCCESS", map[string]any{"tool_id": rec.Tool.ID})
+	return resp, nil
 }
 
 func (e *Engine) evaluate(ctx context.Context, req invocation.Request, tool tools.Definition, hash string) (invocation.Response, *record, error) {
@@ -237,33 +320,39 @@ func (e *Engine) evaluate(ctx context.Context, req invocation.Request, tool tool
 		return resp, rec, nil
 	}
 	if decision.Decision == invocation.DecisionRequireApproval {
+		if decision.Approval == nil {
+			resp := e.response(req.InvocationID, invocation.StateDenied, invocation.DecisionDeny, []string{"POLICY_APPROVAL_OBLIGATION_MISSING"}, "", nil)
+			rec.Response = resp
+			return resp, rec, nil
+		}
 		approvalRequest := e.approvals.Create(req.TenantID, req.InvocationID, req.Subject.ID, req.Agent.OwnerID, decision.Approval.RequiredApprovals, decision.Approval.RequiredGroup, decision.Approval.RequesterMayApprove, decision.Approval.ExpiresIn)
 		resp := e.response(req.InvocationID, invocation.StatePendingApproval, invocation.DecisionRequireApproval, decision.ReasonCodes, approvalRequest.ID, nil)
 		rec.Response = resp
 		_, _ = e.audit.Append(req.TenantID, req.InvocationID, "APPROVAL_REQUESTED", "agent", req.Agent.ID, firstReason(decision.ReasonCodes), map[string]any{"approval_request_id": approvalRequest.ID})
 		return resp, rec, nil
 	}
-	resp, err := e.executeAllowed(ctx, req, tool, riskResult, decision)
+	resp, reservationID, err := e.executeAllowed(ctx, req, tool, riskResult, decision)
+	rec.BudgetReservationID = reservationID
 	rec.Response = resp
 	return resp, rec, err
 }
 
-func (e *Engine) executeAllowed(ctx context.Context, req invocation.Request, tool tools.Definition, riskResult risk.Result, decision policy.Decision) (invocation.Response, error) {
+func (e *Engine) executeAllowed(ctx context.Context, req invocation.Request, tool tools.Definition, riskResult risk.Result, decision policy.Decision) (invocation.Response, string, error) {
 	amount := req.AmountMinor()
 	var reservation budget.Reservation
 	var err error
 	if amount > 0 && tool.SideEffect == tools.SideEffectFinancial {
 		reservation, err = e.budgets.Reserve(req.TenantID, "budget_refunds_july", req.InvocationID, stringCurrency(req.Arguments["currency"]), amount)
 		if err != nil {
-			return e.response(req.InvocationID, invocation.StateDenied, invocation.DecisionDeny, []string{"BUDGET_RESERVATION_FAILED"}, "", nil), nil
+			return e.response(req.InvocationID, invocation.StateDenied, invocation.DecisionDeny, []string{"BUDGET_RESERVATION_FAILED"}, "", nil), "", nil
 		}
 	}
 	rateKey := req.TenantID + ":" + req.Agent.ID + ":" + tool.ID
-	if _, err := e.limits.Check(rateKey); err != nil {
+	if _, err := e.checkRateLimit(ctx, rateKey); err != nil {
 		if reservation.ID != "" {
 			_ = e.budgets.Release(reservation.ID)
 		}
-		return e.response(req.InvocationID, invocation.StateDenied, invocation.DecisionDeny, []string{"RATE_LIMIT_EXCEEDED"}, "", nil), nil
+		return e.response(req.InvocationID, invocation.StateDenied, invocation.DecisionDeny, []string{"RATE_LIMIT_EXCEEDED"}, "", nil), "", nil
 	}
 	scope := credentials.Scope{TenantID: req.TenantID, ToolID: tool.ID, Action: req.Action, Resource: req.Resource.Type + ":" + req.Resource.ID, AmountMinor: amount}
 	credential, err := e.credentials.Issue(scope, 2*time.Minute)
@@ -271,13 +360,13 @@ func (e *Engine) executeAllowed(ctx context.Context, req invocation.Request, too
 		if reservation.ID != "" {
 			_ = e.budgets.Release(reservation.ID)
 		}
-		return e.response(req.InvocationID, invocation.StateDenied, invocation.DecisionDeny, []string{"CREDENTIAL_ISSUANCE_FAILED"}, "", nil), nil
+		return e.response(req.InvocationID, invocation.StateDenied, invocation.DecisionDeny, []string{"CREDENTIAL_ISSUANCE_FAILED"}, "", nil), "", nil
 	}
 	result, err := e.executor.Execute(ctx, req, tool, credential)
 	if errors.Is(err, execution.ErrUnknownOutcome) || result.Outcome == execution.OutcomeUnknown {
 		resp := e.response(req.InvocationID, invocation.StateReconciliationRequired, invocation.DecisionAllow, []string{"DOWNSTREAM_OUTCOME_UNKNOWN"}, "", result.Output)
 		_, _ = e.audit.Append(req.TenantID, req.InvocationID, "RECONCILIATION_REQUIRED", "agent", req.Agent.ID, "DOWNSTREAM_OUTCOME_UNKNOWN", map[string]any{"tool_id": tool.ID})
-		return resp, nil
+		return resp, reservation.ID, nil
 	}
 	if err != nil || result.Outcome == execution.OutcomeFailed {
 		if reservation.ID != "" {
@@ -285,20 +374,31 @@ func (e *Engine) executeAllowed(ctx context.Context, req invocation.Request, too
 		}
 		resp := e.response(req.InvocationID, invocation.StateFailed, invocation.DecisionAllow, []string{"DOWNSTREAM_EXECUTION_FAILED"}, "", nil)
 		_, _ = e.audit.Append(req.TenantID, req.InvocationID, "INVOCATION_FAILED", "agent", req.Agent.ID, "DOWNSTREAM_EXECUTION_FAILED", map[string]any{"tool_id": tool.ID})
-		return resp, nil
+		return resp, "", nil
 	}
 	if err := tools.ValidateOutput(tool, result.Output); err != nil {
 		if reservation.ID != "" {
 			_ = e.budgets.Release(reservation.ID)
 		}
-		return e.response(req.InvocationID, invocation.StateFailed, invocation.DecisionAllow, []string{"TOOL_OUTPUT_SCHEMA_VALIDATION_FAILED"}, "", nil), nil
+		return e.response(req.InvocationID, invocation.StateFailed, invocation.DecisionAllow, []string{"TOOL_OUTPUT_SCHEMA_VALIDATION_FAILED"}, "", nil), "", nil
 	}
 	if reservation.ID != "" {
 		_ = e.budgets.Commit(reservation.ID)
 	}
 	resp := e.response(req.InvocationID, invocation.StateSucceeded, invocation.DecisionAllow, decision.ReasonCodes, "", result.Output)
 	_, _ = e.audit.Append(req.TenantID, req.InvocationID, "INVOCATION_SUCCEEDED", "agent", req.Agent.ID, firstReason(decision.ReasonCodes), map[string]any{"tool_id": tool.ID, "risk_score": riskResult.Score})
-	return resp, nil
+	return resp, reservation.ID, nil
+}
+
+func (e *Engine) checkRateLimit(ctx context.Context, key string) (ratelimit.Decision, error) {
+	if e.redisLimits != nil {
+		rule, ok := e.limits.Rule(key)
+		if !ok {
+			return ratelimit.Decision{Allowed: true}, nil
+		}
+		return e.redisLimits.Check(ctx, key, rule)
+	}
+	return e.limits.Check(key)
 }
 
 func (e *Engine) deny(req invocation.Request, reason string) invocation.Response {
@@ -322,6 +422,10 @@ func (e *Engine) updateRecord(rec *record, resp invocation.Response) {
 	rec.Response = resp
 	e.invocations[rec.Request.InvocationID] = rec
 	e.invocations[rec.Request.TenantID+"\x00"+rec.Request.InvocationID] = rec
+}
+
+func (e *Engine) completeIdempotency(rec *record, resp invocation.Response) {
+	e.idempotency.CompleteKey(rec.Request.TenantID, rec.Request.Tool.ID, rec.Request.Action, rec.Request.IdempotencyKey, resp)
 }
 
 func (e *Engine) findByInvocationLocked(tenantID, invocationID string) *record {

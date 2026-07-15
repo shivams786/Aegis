@@ -82,6 +82,18 @@ paths:
           description: Generic not found.
         "501":
           description: Reserved in Milestone 0 implementation.
+  /v1/invocations/{invocation_id}/reconcile:
+    post:
+      summary: Reconcile an invocation with an unknown downstream outcome.
+      parameters:
+        - name: invocation_id
+          in: path
+          required: true
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Reconciliation result.
   /v1/approvals:
     get:
       summary: List pending approval requests.
@@ -116,6 +128,140 @@ paths:
       responses:
         "200":
           description: Invocation rejected.
+  /v1/policy/bundles:
+    get:
+      summary: List policy bundles for a tenant.
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+        - name: tenant_id
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Policy bundle list.
+        "503":
+          description: PostgreSQL is unavailable.
+    post:
+      summary: Register policy bundle metadata.
+      parameters:
+        - name: tenant_id
+          in: query
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PolicyBundleCreate"
+      responses:
+        "201":
+          description: Policy bundle registered.
+        "400":
+          description: Invalid policy bundle request.
+        "503":
+          description: PostgreSQL is unavailable.
+  /v1/policy/bundles/{bundle_id}:
+    get:
+      summary: Read policy bundle metadata.
+      parameters:
+        - name: bundle_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: tenant_id
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Policy bundle metadata.
+        "404":
+          description: Policy bundle was not found.
+  /v1/policy/bundles/{bundle_id}/activate:
+    post:
+      summary: Activate a policy bundle and retire the previous active bundle.
+      parameters:
+        - name: bundle_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: tenant_id
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Policy bundle activated.
+        "400":
+          description: Policy bundle could not be activated.
+        "503":
+          description: PostgreSQL is unavailable.
+  /v1/policy/simulations:
+    get:
+      summary: List policy simulation replay runs.
+      parameters:
+        - name: limit
+          in: query
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+        - name: tenant_id
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Policy simulation run list.
+        "503":
+          description: PostgreSQL is unavailable.
+    post:
+      summary: Queue a policy simulation replay run.
+      parameters:
+        - name: tenant_id
+          in: query
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/PolicySimulationCreate"
+      responses:
+        "201":
+          description: Policy simulation run queued.
+        "400":
+          description: Invalid policy simulation request.
+        "503":
+          description: PostgreSQL is unavailable.
+  /v1/policy/simulations/{simulation_id}:
+    get:
+      summary: Read a policy simulation replay run.
+      parameters:
+        - name: simulation_id
+          in: path
+          required: true
+          schema:
+            type: string
+        - name: tenant_id
+          in: query
+          schema:
+            type: string
+      responses:
+        "200":
+          description: Policy simulation run.
+        "404":
+          description: Simulation was not found.
   /v1/tools:
     get:
       summary: List active tools available to the caller.
@@ -136,6 +282,12 @@ paths:
           description: Audit chain verifies.
         "409":
           description: Audit chain verification failed.
+  /v1/audit/roots:
+    get:
+      summary: Generate or read tenant audit root manifests.
+      responses:
+        "200":
+          description: Audit root manifest.
   /mcp:
     post:
       summary: Streamable HTTP MCP endpoint.
@@ -175,3 +327,96 @@ components:
           type: string
         reason_code:
           type: string
+    PolicyBundleCreate:
+      type: object
+      required:
+        - version
+        - policy_hash
+      properties:
+        id:
+          type: string
+        version:
+          type: string
+        policy_hash:
+          type: string
+          pattern: "^sha256:"
+        source:
+          type: string
+          enum:
+            - local
+            - opa_bundle
+            - uploaded
+            - candidate
+          default: candidate
+        description:
+          type: string
+        opa_bundle_url:
+          type: string
+        metadata:
+          type: object
+          additionalProperties: true
+        created_by_subject_id:
+          type: string
+    PolicyBundle:
+      allOf:
+        - $ref: "#/components/schemas/PolicyBundleCreate"
+        - type: object
+          required:
+            - tenant_id
+            - id
+            - source
+            - status
+            - active
+            - description
+            - metadata
+            - created_at
+            - updated_at
+          properties:
+            tenant_id:
+              type: string
+            status:
+              type: string
+              enum:
+                - CANDIDATE
+                - ACTIVE
+                - RETIRED
+                - REJECTED
+            active:
+              type: boolean
+            created_at:
+              type: string
+              format: date-time
+            updated_at:
+              type: string
+              format: date-time
+            activated_at:
+              type: string
+              format: date-time
+            retired_at:
+              type: string
+              format: date-time
+    PolicySimulationCreate:
+      type: object
+      required:
+        - baseline_policy_version
+        - baseline_policy_hash
+        - proposed_policy_version
+        - proposed_policy_hash
+      properties:
+        id:
+          type: string
+        requested_by_subject_id:
+          type: string
+        baseline_policy_version:
+          type: string
+        baseline_policy_hash:
+          type: string
+          pattern: "^sha256:"
+        proposed_policy_version:
+          type: string
+        proposed_policy_hash:
+          type: string
+          pattern: "^sha256:"
+        sample_scope:
+          type: object
+          additionalProperties: true

@@ -39,3 +39,7 @@ Mutating invocations require idempotency keys. The same tenant, tool, action, an
 ## Tenant Isolation
 
 Every tenant-owned table includes `tenant_id`. Application queries must explicitly constrain tenants. PostgreSQL row-level security is defense in depth.
+
+## Controlled Policy Rollout
+
+Policy bundle metadata is tenant-scoped, version/hash-addressed, and limited to one active bundle per tenant. Bundle registration and activation are emitted through the transactional outbox so policy rollout can be audited and replayed.

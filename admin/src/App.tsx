@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
-import { Check, Database, FileSearch, Gauge, Inbox, Play, ShieldCheck, Wrench } from "lucide-react";
+import { Check, Database, FileSearch, Gauge, Inbox, Play, RefreshCw, ShieldCheck, Wrench } from "lucide-react";
 import "./styles.css";
 
 type Tab = "approvals" | "invocations" | "simulator" | "tools" | "budgets" | "audit";
@@ -50,11 +50,73 @@ function Approvals() {
 }
 
 function Simulator() {
+  const [simulations, setSimulations] = useState("Loading");
+  const [bundles, setBundles] = useState("Loading");
+
+  async function load() {
+    try {
+      const [bundleResponse, simulationResponse] = await Promise.all([
+        fetch(`${apiBase}/v1/policy/bundles?tenant_id=tenant_acme&limit=20`),
+        fetch(`${apiBase}/v1/policy/simulations?tenant_id=tenant_acme&limit=20`)
+      ]);
+      setBundles(await bundleResponse.text());
+      setSimulations(await simulationResponse.text());
+    } catch (err) {
+      const message = String(err);
+      setBundles(message);
+      setSimulations(message);
+    }
+  }
+
+  async function registerBundle() {
+    const now = Date.now();
+    const hashSuffix = now.toString(16).padStart(16, "0").slice(-16);
+    const response = await fetch(`${apiBase}/v1/policy/bundles?tenant_id=tenant_acme`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        version: `candidate-${now}`,
+        policy_hash: `sha256:${"b".repeat(48)}${hashSuffix}`,
+        source: "candidate",
+        description: "Local candidate policy bundle",
+        metadata: { opa_package: "aegis.authz", registered_from: "admin" }
+      })
+    });
+    setBundles(await response.text());
+  }
+
+  async function queueSimulation() {
+    const response = await fetch(`${apiBase}/v1/policy/simulations?tenant_id=tenant_acme`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        baseline_policy_version: "local-policy-v1",
+        baseline_policy_hash: "sha256:020b3726a1d72f47bb05413ac4436ff0e131f16244863e83f03e9dd9c09f66c4",
+        proposed_policy_version: "candidate-demo",
+        proposed_policy_hash: "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        sample_scope: { tool_id: "payments.refund", sample_limit: 100 }
+      })
+    });
+    setSimulations(await response.text());
+  }
+
+  useEffect(() => {
+    void load();
+  }, []);
+
   return (
-    <StaticPanel
-      title="Policy Simulator"
-      text="Policy comparison flags approval-to-allow, deny-to-allow, credential-scope widening, and redaction removal in the backend policy package."
-    />
+    <div className="panel">
+      <h1>Policy Simulator</h1>
+      <div className="toolbar">
+        <button className="primary" onClick={queueSimulation}><Play size={16} /> Queue</button>
+        <button className="secondary" onClick={registerBundle}><ShieldCheck size={16} /> Register Bundle</button>
+        <button className="secondary" onClick={load}><RefreshCw size={16} /> Refresh</button>
+      </div>
+      <div className="split">
+        <pre>{bundles}</pre>
+        <pre>{simulations}</pre>
+      </div>
+    </div>
   );
 }
 
@@ -67,7 +129,9 @@ function Audit() {
   return (
     <div className="panel">
       <h1>Audit Verification</h1>
-      <button className="primary" onClick={verify}><Check size={16} /> Verify</button>
+      <div className="toolbar">
+        <button className="primary" onClick={verify}><Check size={16} /> Verify</button>
+      </div>
       <pre>{result}</pre>
     </div>
   );

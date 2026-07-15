@@ -42,6 +42,13 @@ func (l *Limiter) SetRule(key string, rule Rule) {
 	l.limits[key] = rule
 }
 
+func (l *Limiter) Rule(key string) (Rule, bool) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	rule, ok := l.limits[key]
+	return rule, ok
+}
+
 func (l *Limiter) Check(key string) (Decision, error) {
 	l.mu.Lock()
 	defer l.mu.Unlock()

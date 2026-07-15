@@ -117,6 +117,17 @@ services:
       AEGIS_AUTH_REQUIRED_TOKEN_TYPE: ${AEGIS_AUTH_REQUIRED_TOKEN_TYPE:-Bearer}
       AEGIS_AUTH_CLOCK_SKEW: ${AEGIS_AUTH_CLOCK_SKEW:-30s}
       AEGIS_AUTH_PROTECTED_RESOURCE_ID: ${AEGIS_AUTH_PROTECTED_RESOURCE_ID:-http://localhost:8080}
+      AEGIS_OPA_URL: ${AEGIS_OPA_URL:-http://opa:8181}
+      AEGIS_OPA_DECISION_PATH: ${AEGIS_OPA_DECISION_PATH:-aegis/authz/decision}
+      AEGIS_OPA_POLICY_VERSION: ${AEGIS_OPA_POLICY_VERSION:-local-bundle}
+      AEGIS_OPA_TIMEOUT: ${AEGIS_OPA_TIMEOUT:-2s}
+      AEGIS_OPENBAO_ADDR: ${AEGIS_OPENBAO_ADDR:-http://openbao:8200}
+      AEGIS_OPENBAO_TOKEN: ${AEGIS_OPENBAO_TOKEN:-dev-root-token}
+      AEGIS_OPENBAO_MOUNT: ${AEGIS_OPENBAO_MOUNT:-secret}
+      AEGIS_REDIS_ADDR: ${AEGIS_REDIS_ADDR:-redis:6379}
+      AEGIS_REDIS_PREFIX: ${AEGIS_REDIS_PREFIX:-aegis:ratelimit:}
+      AEGIS_NATS_ADDR: ${AEGIS_NATS_ADDR:-nats:4222}
+      AEGIS_NATS_SUBJECT: ${AEGIS_NATS_SUBJECT:-aegis.events}
     ports:
       - "${AEGIS_PORT:-8080}:8080"
     depends_on:
@@ -124,8 +135,81 @@ services:
         condition: service_healthy
       keycloak:
         condition: service_started
+      opa:
+        condition: service_started
+      redis:
+        condition: service_started
+      nats:
+        condition: service_started
+      openbao:
+        condition: service_started
       otel-collector:
         condition: service_started
+
+  worker:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    entrypoint: ["/aegis-worker"]
+    environment:
+      AEGIS_SERVICE_NAME: aegis-worker
+      AEGIS_ENVIRONMENT: development
+      AEGIS_DATABASE_URL: postgres://${POSTGRES_USER:-aegis}:${POSTGRES_PASSWORD:-aegis_dev_password}@postgres:5432/${POSTGRES_DB:-aegis}?sslmode=disable
+      AEGIS_REQUIRE_DATABASE: "true"
+      AEGIS_LOG_LEVEL: ${AEGIS_LOG_LEVEL:-info}
+      AEGIS_NATS_ADDR: ${AEGIS_NATS_ADDR:-nats:4222}
+      AEGIS_NATS_SUBJECT: ${AEGIS_NATS_SUBJECT:-aegis.events}
+      AEGIS_WORKER_OUTBOX_INTERVAL: ${AEGIS_WORKER_OUTBOX_INTERVAL:-2s}
+      AEGIS_WORKER_OUTBOX_BATCH_SIZE: ${AEGIS_WORKER_OUTBOX_BATCH_SIZE:-50}
+      AEGIS_WORKER_OUTBOX_MAX_ATTEMPTS: ${AEGIS_WORKER_OUTBOX_MAX_ATTEMPTS:-5}
+      AEGIS_WORKER_APPROVAL_EXPIRY_INTERVAL: ${AEGIS_WORKER_APPROVAL_EXPIRY_INTERVAL:-30s}
+      AEGIS_WORKER_BUDGET_SWEEP_INTERVAL: ${AEGIS_WORKER_BUDGET_SWEEP_INTERVAL:-30s}
+      AEGIS_WORKER_BUDGET_RESERVATION_TTL: ${AEGIS_WORKER_BUDGET_RESERVATION_TTL:-15m}
+      AEGIS_WORKER_BUDGET_SWEEP_BATCH_SIZE: ${AEGIS_WORKER_BUDGET_SWEEP_BATCH_SIZE:-50}
+      AEGIS_WORKER_RECONCILIATION_INTERVAL: ${AEGIS_WORKER_RECONCILIATION_INTERVAL:-30s}
+      AEGIS_WORKER_RECONCILIATION_BATCH_SIZE: ${AEGIS_WORKER_RECONCILIATION_BATCH_SIZE:-25}
+      AEGIS_WORKER_RECONCILIATION_LEASE_DURATION: ${AEGIS_WORKER_RECONCILIATION_LEASE_DURATION:-2m}
+      AEGIS_WORKER_RECONCILIATION_RETRY_AFTER: ${AEGIS_WORKER_RECONCILIATION_RETRY_AFTER:-1m}
+      AEGIS_WORKER_RECONCILIATION_LEASE_OWNER: ${AEGIS_WORKER_RECONCILIATION_LEASE_OWNER:-aegis-worker}
+      AEGIS_WORKER_POLICY_SIMULATION_INTERVAL: ${AEGIS_WORKER_POLICY_SIMULATION_INTERVAL:-60s}
+      AEGIS_WORKER_POLICY_SIMULATION_BATCH_SIZE: ${AEGIS_WORKER_POLICY_SIMULATION_BATCH_SIZE:-10}
+      AEGIS_WORKER_POLICY_SIMULATION_LEASE_DURATION: ${AEGIS_WORKER_POLICY_SIMULATION_LEASE_DURATION:-5m}
+      AEGIS_WORKER_POLICY_SIMULATION_RETRY_AFTER: ${AEGIS_WORKER_POLICY_SIMULATION_RETRY_AFTER:-5m}
+      AEGIS_WORKER_POLICY_SIMULATION_LEASE_OWNER: ${AEGIS_WORKER_POLICY_SIMULATION_LEASE_OWNER:-aegis-worker}
+      AEGIS_WORKER_AUDIT_ROOT_INTERVAL: ${AEGIS_WORKER_AUDIT_ROOT_INTERVAL:-60s}
+      AEGIS_WORKER_AUDIT_ROOT_SIGNER: ${AEGIS_WORKER_AUDIT_ROOT_SIGNER:-aegis-dev-signer}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_started
+
+  payments-mcp:
+    image: node:22-alpine
+    working_dir: /app
+    command: ["node", "payments-mcp/server.js"]
+    ports:
+      - "${PAYMENTS_MCP_PORT:-8091}:8091"
+    volumes:
+      - ../examples:/app:ro
+
+  crm-mcp:
+    image: node:22-alpine
+    working_dir: /app
+    command: ["node", "crm-mcp/server.js"]
+    ports:
+      - "${CRM_MCP_PORT:-8092}:8092"
+    volumes:
+      - ../examples:/app:ro
+
+  messaging-mcp:
+    image: node:22-alpine
+    working_dir: /app
+    command: ["node", "messaging-mcp/server.js"]
+    ports:
+      - "${MESSAGING_MCP_PORT:-8093}:8093"
+    volumes:
+      - ../examples:/app:ro
 
 volumes:
   postgres-data:

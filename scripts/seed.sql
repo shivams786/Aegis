@@ -12,6 +12,59 @@ VALUES
     ('tenant_globex', 'user_999', 'human', ARRAY['support'], ARRAY['refund_operator'])
 ON CONFLICT (tenant_id, id) DO NOTHING;
 
+INSERT INTO policy_bundles (
+    tenant_id,
+    id,
+    version,
+    policy_hash,
+    source,
+    status,
+    active,
+    description,
+    metadata,
+    created_by_subject_id
+)
+VALUES
+    (
+        'tenant_acme',
+        'bundle_local_policy_v1',
+        'local-policy-v1',
+        'sha256:020b3726a1d72f47bb05413ac4436ff0e131f16244863e83f03e9dd9c09f66c4',
+        'local',
+        'CANDIDATE',
+        false,
+        'Deterministic local policy compiled into the gateway.',
+        '{"policy_package":"aegis.authz","runtime":"local"}'::jsonb,
+        'user_123'
+    ),
+    (
+        'tenant_acme',
+        'bundle_candidate_demo',
+        'candidate-demo',
+        'sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+        'candidate',
+        'CANDIDATE',
+        false,
+        'Candidate policy bundle for simulation demos.',
+        '{"policy_package":"aegis.authz","runtime":"opa_bundle"}'::jsonb,
+        'user_123'
+    )
+ON CONFLICT (tenant_id, id) DO NOTHING;
+
+UPDATE policy_bundles
+SET active = true,
+    status = 'ACTIVE',
+    activated_at = coalesce(activated_at, now()),
+    updated_at = now()
+WHERE tenant_id = 'tenant_acme'
+  AND id = 'bundle_local_policy_v1'
+  AND NOT EXISTS (
+      SELECT 1
+      FROM policy_bundles
+      WHERE tenant_id = 'tenant_acme'
+        AND active = true
+  );
+
 INSERT INTO agents (tenant_id, id, owner_subject_id, client_id, trust_level)
 VALUES
     ('tenant_acme', 'agent_refund_assistant', 'user_123', 'refund-agent-client', 3),

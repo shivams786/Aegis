@@ -7,6 +7,8 @@ DROP TABLE IF EXISTS approval_decisions;
 DROP TABLE IF EXISTS approval_requests;
 DROP INDEX IF EXISTS invocations_idempotency_key_uniq;
 DROP TABLE IF EXISTS invocations;
+DROP TABLE IF EXISTS policy_simulation_runs;
+DROP TABLE IF EXISTS policy_bundles;
 DROP TABLE IF EXISTS tool_versions;
 DROP TABLE IF EXISTS tools;
 DROP TABLE IF EXISTS delegation_grants;
