@@ -530,7 +530,7 @@ Verification executed:
 Known limitations:
 
 - Backend tests, gofmt, Docker Compose validation, and OPA policy tests still cannot run because the required binaries are unavailable on PATH.
-- The worker leases simulation runs; full candidate-vs-baseline OPA replay still needs a replay evaluator behind the durable run contract.
+- The worker leases simulation runs; executing archived OPA bundle artifacts during replay still needs a dedicated policy-engine adapter.
 
 ## 2026-07-15 - Policy Simulation API Cycle
 
@@ -565,7 +565,7 @@ Verification executed:
 Known limitations:
 
 - Backend tests, gofmt, Docker Compose validation, and OPA policy tests still cannot run because the required binaries are unavailable on PATH.
-- The API queues and reads simulation runs; full candidate-vs-baseline OPA replay still needs a replay evaluator behind the durable run contract.
+- The API queues and reads simulation runs; executing archived OPA bundle artifacts during replay still needs a dedicated policy-engine adapter.
 
 ## 2026-07-15 - Policy Bundle Registry Cycle
 
@@ -603,7 +603,7 @@ Verification executed:
 Known limitations:
 
 - Backend tests, gofmt, Docker Compose validation, and OPA policy tests still cannot run because the required binaries are unavailable on PATH.
-- Policy bundle metadata and simulation leasing are durable; full candidate-vs-baseline OPA replay still needs a replay evaluator behind the durable run contract.
+- Policy bundle metadata and simulation leasing are durable; executing archived OPA bundle artifacts during replay still needs a dedicated policy-engine adapter.
 
 ## 2026-07-15 - Policy Simulation Completion Cycle
 
@@ -616,7 +616,7 @@ Implemented:
 - Persisted validation failures into `policy_simulation_runs` with `FAILED` state and redacted findings when referenced bundle hashes are missing.
 - Added `PolicySimulationRunCompleted` and `PolicySimulationRunFailed` outbox events.
 - Updated the worker to lease and complete simulation runs in the same recurring policy simulation worker loop.
-- Updated docs to describe simulation summary completion and the remaining full OPA replay boundary.
+- Updated docs to describe metadata-driven simulation replay and the remaining archived-OPA-bundle adapter boundary.
 
 Security and consistency properties implemented:
 
@@ -640,4 +640,44 @@ Verification executed:
 Known limitations:
 
 - Backend tests, gofmt, Docker Compose validation, and OPA policy tests still cannot run because the required binaries are unavailable on PATH.
-- Policy simulation completion currently writes a durable summary and validates bundle references; full candidate-vs-baseline OPA replay still needs a replay evaluator behind this run-row contract.
+- Policy simulation completion writes durable metadata-driven replay findings and validates bundle references. Executing archived OPA bundle artifacts during replay still needs a dedicated policy-engine adapter behind this run-row contract.
+
+## 2026-07-16 - Policy Replay Refinement Cycle
+
+Implemented:
+
+- Added a metadata-driven bundle replay evaluator that can compare baseline and proposed bundle decisions against the same persisted invocation sample.
+- Added replay support for approval-threshold changes, required approval changes, risk approval score changes, forced decisions, redaction changes, and credential-scope changes.
+- Reworked simulation completion to load bounded invocation samples from PostgreSQL with subject, agent, tool, and tool-version context.
+- Persisted dangerous replay findings with invocation ID, tool, action, resource, risk score, baseline/proposed decisions, decision IDs, policy versions, and policy hashes.
+- Kept findings redacted: replay rows do not persist sampled arguments, response bodies, credentials, or policy source bodies.
+- Seeded a high-value Acme refund invocation so the local policy simulation demo has a real approval-to-allow change to detect.
+- Updated the candidate demo bundle metadata to raise the refund review threshold and risk approval score for replay.
+- Added policy tests for metadata threshold replay and credential-scope widening.
+- Removed stale count-only replay helpers after switching completion to actual decision comparison.
+- Updated README and docs to describe metadata-driven replay and the remaining archived-OPA-bundle adapter boundary.
+
+Security and consistency properties implemented:
+
+- Replay only evaluates invocation samples selected inside the worker's tenant-scoped transaction.
+- Bundle hashes must resolve to durable policy bundle metadata before replay can complete.
+- Dangerous findings are capped to 100 detailed rows per run while total dangerous finding counts remain accurate.
+- The replay evaluator uses the same decision comparison rules as the in-memory policy simulation tests.
+
+Verification executed:
+
+- Static file review for policy, storage, seed, README, and docs changes completed.
+- `node --check examples/payments-mcp/server.js`: passed.
+- `node --check examples/crm-mcp/server.js`: passed.
+- `node --check examples/messaging-mcp/server.js`: passed.
+- `npm.cmd --prefix admin run build`: passed.
+- `git diff --check`: passed.
+- `where.exe go`: Go is not installed/on PATH.
+- `where.exe gofmt`: gofmt is not installed/on PATH.
+- `where.exe docker`: Docker is not installed/on PATH.
+- `where.exe opa`: OPA is not installed/on PATH.
+
+Known limitations:
+
+- Backend tests, gofmt, Docker Compose validation, and OPA policy tests still cannot run because the required binaries are unavailable on PATH.
+- Replay is metadata-driven; executing archived OPA bundle artifacts remains a future adapter behind the durable run contract.

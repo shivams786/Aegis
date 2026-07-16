@@ -13,7 +13,11 @@ import (
 	"github.com/aegis/aegis/internal/authn"
 	"github.com/aegis/aegis/internal/config"
 	"github.com/aegis/aegis/internal/delegation"
+	"github.com/aegis/aegis/internal/invocation"
 	"github.com/aegis/aegis/internal/outbox"
+	"github.com/aegis/aegis/internal/policy"
+	"github.com/aegis/aegis/internal/risk"
+	"github.com/aegis/aegis/internal/tools"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgtype"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -78,6 +82,12 @@ type PolicySimulationCompleteOptions struct {
 type PolicySimulationCompleteResult struct {
 	Completed int64
 	Failed    int64
+}
+
+type policySimulationReplaySample struct {
+	Request invocation.Request
+	Tool    tools.Definition
+	Risk    risk.Result
 }
 
 type PolicyBundleCreate struct {
@@ -1599,7 +1609,11 @@ func (s *Store) completeTenantPolicySimulationRuns(ctx context.Context, tenantID
 			return fmt.Errorf("iterate leased policy simulation runs: %w", err)
 		}
 		for _, run := range runs {
-			baselineExists, proposedExists, err := policySimulationBundleHashesExist(ctx, tx, tenantID, run.BaselinePolicyHash, run.ProposedPolicyHash)
+			baselineBundle, baselineExists, err := loadPolicySimulationBundle(ctx, tx, tenantID, run.BaselinePolicyHash)
+			if err != nil {
+				return err
+			}
+			proposedBundle, proposedExists, err := loadPolicySimulationBundle(ctx, tx, tenantID, run.ProposedPolicyHash)
 			if err != nil {
 				return err
 			}
@@ -1610,11 +1624,11 @@ func (s *Store) completeTenantPolicySimulationRuns(ctx context.Context, tenantID
 				result.Failed++
 				continue
 			}
-			sampleCount, err := countPolicySimulationSamples(ctx, tx, tenantID, run.SampleScope)
+			samples, err := loadPolicySimulationReplaySamples(ctx, tx, tenantID, run.SampleScope)
 			if err != nil {
 				return err
 			}
-			if err := completePolicySimulationRun(ctx, tx, run, now, sampleCount); err != nil {
+			if err := completePolicySimulationRun(ctx, tx, run, baselineBundle, proposedBundle, samples, now); err != nil {
 				return err
 			}
 			result.Completed++
@@ -1627,64 +1641,280 @@ func (s *Store) completeTenantPolicySimulationRuns(ctx context.Context, tenantID
 	return result, nil
 }
 
-func policySimulationBundleHashesExist(ctx context.Context, tx pgx.Tx, tenantID, baselineHash, proposedHash string) (bool, bool, error) {
-	var baselineExists bool
-	var proposedExists bool
-	err := tx.QueryRow(ctx, `
-		select exists (
-			select 1
-			from policy_bundles
-			where tenant_id = $1
-			  and policy_hash = $2
-		),
-		exists (
-			select 1
-			from policy_bundles
-			where tenant_id = $1
-			  and policy_hash = $3
-		)
-	`, tenantID, baselineHash, proposedHash).Scan(&baselineExists, &proposedExists)
+func loadPolicySimulationBundle(ctx context.Context, tx pgx.Tx, tenantID, policyHash string) (PolicyBundle, bool, error) {
+	bundle, err := scanPolicyBundle(tx.QueryRow(ctx, `
+		select tenant_id,
+		       id,
+		       version,
+		       policy_hash,
+		       source,
+		       status,
+		       active,
+		       description,
+		       opa_bundle_url,
+		       metadata,
+		       created_by_subject_id,
+		       created_at,
+		       updated_at,
+		       activated_at,
+		       retired_at
+		from policy_bundles
+		where tenant_id = $1
+		  and policy_hash = $2
+	`, tenantID, policyHash))
 	if err != nil {
-		return false, false, fmt.Errorf("check policy simulation bundle hashes: %w", err)
+		if errors.Is(err, pgx.ErrNoRows) {
+			return PolicyBundle{}, false, nil
+		}
+		return PolicyBundle{}, false, fmt.Errorf("load policy simulation bundle: %w", err)
 	}
-	return baselineExists, proposedExists, nil
+	return bundle, true, nil
 }
 
-func countPolicySimulationSamples(ctx context.Context, tx pgx.Tx, tenantID string, scope map[string]any) (int, error) {
+func loadPolicySimulationReplaySamples(ctx context.Context, tx pgx.Tx, tenantID string, scope map[string]any) ([]policySimulationReplaySample, error) {
 	limit := policySimulationSampleLimit(scope)
-	var count int64
-	err := tx.QueryRow(ctx, `
-		select count(*)
-		from (
-			select 1
-			from invocations
-			where tenant_id = $1
-			  and ($2 = '' or tool_id = $2)
-			  and ($3 = '' or action = $3)
-			  and ($4 = '' or resource_type = $4)
-			  and ($5 = '' or resource_id = $5)
-			order by created_at desc, invocation_id desc
-			limit $6
-		) samples
-	`, tenantID, policySimulationScopeString(scope, "tool_id"), policySimulationScopeString(scope, "action"), policySimulationScopeString(scope, "resource_type"), policySimulationScopeString(scope, "resource_id"), limit).Scan(&count)
+	rows, err := tx.Query(ctx, `
+		select i.tenant_id,
+		       i.invocation_id,
+		       i.protocol,
+		       coalesce(i.protocol_request_id, ''),
+		       coalesce(i.idempotency_key, ''),
+		       i.subject_id,
+		       s.type,
+		       s.groups,
+		       s.roles,
+		       i.agent_id,
+		       a.trust_level,
+		       a.owner_subject_id,
+		       a.client_id,
+		       i.delegation_id,
+		       i.tool_id,
+		       i.tool_schema_version,
+		       i.tool_schema_hash,
+		       i.action,
+		       i.resource_type,
+		       i.resource_id,
+		       i.purpose,
+		       i.redacted_arguments,
+		       i.created_at,
+		       t.display_name,
+		       t.mcp_server_id,
+		       t.mcp_tool_name,
+		       t.active,
+		       tv.description,
+		       tv.input_schema,
+		       tv.output_schema,
+		       tv.risk_classification,
+		       tv.side_effect_classification,
+		       tv.data_sensitivity,
+		       tv.required_scopes,
+		       tv.required_credential_template,
+		       tv.timeout_ms,
+		       tv.retry_policy,
+		       tv.idempotency_supported,
+		       tv.approval_defaults,
+		       tv.allowed_network_destination,
+		       tv.connector_version
+		from invocations i
+		join subjects s
+		  on s.tenant_id = i.tenant_id
+		 and s.id = i.subject_id
+		join agents a
+		  on a.tenant_id = i.tenant_id
+		 and a.id = i.agent_id
+		join tools t
+		  on t.tenant_id = i.tenant_id
+		 and t.tool_id = i.tool_id
+		join tool_versions tv
+		  on tv.tenant_id = i.tenant_id
+		 and tv.tool_id = i.tool_id
+		 and tv.schema_version = i.tool_schema_version
+		where i.tenant_id = $1
+		  and ($2 = '' or i.tool_id = $2)
+		  and ($3 = '' or i.action = $3)
+		  and ($4 = '' or i.resource_type = $4)
+		  and ($5 = '' or i.resource_id = $5)
+		order by i.created_at desc, i.invocation_id desc
+		limit $6
+	`, tenantID, policySimulationScopeString(scope, "tool_id"), policySimulationScopeString(scope, "action"), policySimulationScopeString(scope, "resource_type"), policySimulationScopeString(scope, "resource_id"), limit)
 	if err != nil {
-		return 0, fmt.Errorf("count policy simulation samples: %w", err)
+		return nil, fmt.Errorf("load policy simulation replay samples: %w", err)
 	}
-	return int(count), nil
+	defer rows.Close()
+
+	samples := make([]policySimulationReplaySample, 0, limit)
+	for rows.Next() {
+		sample, err := scanPolicySimulationReplaySample(rows)
+		if err != nil {
+			return nil, err
+		}
+		samples = append(samples, sample)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("iterate policy simulation replay samples: %w", err)
+	}
+	return samples, nil
 }
 
-func completePolicySimulationRun(ctx context.Context, tx pgx.Tx, run PolicySimulationRun, completedAt time.Time, sampleCount int) error {
-	findings, err := json.Marshal([]map[string]any{
-		{
-			"type":                    "SIMULATION_SUMMARY",
-			"baseline_policy_version": run.BaselinePolicyVersion,
-			"baseline_policy_hash":    run.BaselinePolicyHash,
-			"proposed_policy_version": run.ProposedPolicyVersion,
-			"proposed_policy_hash":    run.ProposedPolicyHash,
-			"sample_count":            sampleCount,
-			"dangerous_findings":      0,
-		},
-	})
+func scanPolicySimulationReplaySample(rows pgx.Rows) (policySimulationReplaySample, error) {
+	var sample policySimulationReplaySample
+	var subjectType string
+	var argumentsRaw []byte
+	var requestedAt time.Time
+	var inputSchemaRaw []byte
+	var outputSchemaRaw []byte
+	var retryPolicyRaw []byte
+	var approvalDefaultsRaw []byte
+	var timeoutMS int
+	var protocol string
+	var toolRisk string
+	var sideEffect string
+	var dataSensitivity string
+	if err := rows.Scan(
+		&sample.Request.TenantID,
+		&sample.Request.InvocationID,
+		&protocol,
+		&sample.Request.ProtocolRequestID,
+		&sample.Request.IdempotencyKey,
+		&sample.Request.Subject.ID,
+		&subjectType,
+		&sample.Request.Subject.Groups,
+		&sample.Request.Subject.Roles,
+		&sample.Request.Agent.ID,
+		&sample.Request.Agent.TrustLevel,
+		&sample.Request.Agent.OwnerID,
+		&sample.Request.Agent.ClientID,
+		&sample.Request.DelegationID,
+		&sample.Request.Tool.ID,
+		&sample.Request.Tool.SchemaVersion,
+		&sample.Request.Tool.SchemaHash,
+		&sample.Request.Action,
+		&sample.Request.Resource.Type,
+		&sample.Request.Resource.ID,
+		&sample.Request.Purpose,
+		&argumentsRaw,
+		&requestedAt,
+		&sample.Tool.DisplayName,
+		&sample.Tool.MCPServerID,
+		&sample.Tool.MCPToolName,
+		&sample.Tool.Active,
+		&sample.Tool.Description,
+		&inputSchemaRaw,
+		&outputSchemaRaw,
+		&toolRisk,
+		&sideEffect,
+		&dataSensitivity,
+		&sample.Tool.RequiredScopes,
+		&sample.Tool.RequiredCredentialTemplate,
+		&timeoutMS,
+		&retryPolicyRaw,
+		&sample.Tool.IdempotencySupported,
+		&approvalDefaultsRaw,
+		&sample.Tool.AllowedNetworkDestination,
+		&sample.Tool.ConnectorVersion,
+	); err != nil {
+		return policySimulationReplaySample{}, fmt.Errorf("scan policy simulation replay sample: %w", err)
+	}
+	arguments, err := decodeJSONMap(argumentsRaw)
+	if err != nil {
+		return policySimulationReplaySample{}, fmt.Errorf("decode policy simulation sample arguments: %w", err)
+	}
+	inputSchema, err := decodeJSONMap(inputSchemaRaw)
+	if err != nil {
+		return policySimulationReplaySample{}, fmt.Errorf("decode policy simulation input schema: %w", err)
+	}
+	outputSchema, err := decodeJSONMap(outputSchemaRaw)
+	if err != nil {
+		return policySimulationReplaySample{}, fmt.Errorf("decode policy simulation output schema: %w", err)
+	}
+	var retryPolicy tools.RetryPolicy
+	if len(retryPolicyRaw) > 0 {
+		if err := json.Unmarshal(retryPolicyRaw, &retryPolicy); err != nil {
+			return policySimulationReplaySample{}, fmt.Errorf("decode policy simulation retry policy: %w", err)
+		}
+	}
+	var approvalDefaults tools.ApprovalDefaults
+	if len(approvalDefaultsRaw) > 0 {
+		if err := json.Unmarshal(approvalDefaultsRaw, &approvalDefaults); err != nil {
+			return policySimulationReplaySample{}, fmt.Errorf("decode policy simulation approval defaults: %w", err)
+		}
+	}
+	sample.Request.Subject.Type = authn.PrincipalType(subjectType)
+	sample.Request.Protocol = invocation.Protocol(protocol)
+	sample.Request.Arguments = arguments
+	sample.Request.Resource.OwnerTenantID = sample.Request.TenantID
+	sample.Request.RequestContext.RequestedAt = requestedAt.UTC()
+	sample.Tool.TenantID = sample.Request.TenantID
+	sample.Tool.ID = sample.Request.Tool.ID
+	sample.Tool.SchemaVersion = sample.Request.Tool.SchemaVersion
+	sample.Tool.SchemaHash = sample.Request.Tool.SchemaHash
+	sample.Tool.InputSchema = inputSchema
+	sample.Tool.OutputSchema = outputSchema
+	sample.Tool.Risk = tools.RiskClassification(toolRisk)
+	sample.Tool.SideEffect = tools.SideEffectClassification(sideEffect)
+	sample.Tool.DataSensitivity = tools.DataSensitivity(dataSensitivity)
+	sample.Tool.Timeout = time.Duration(timeoutMS) * time.Millisecond
+	sample.Tool.RetryPolicy = retryPolicy
+	sample.Tool.ApprovalDefaults = approvalDefaults
+	sample.Risk = risk.Calculate(sample.Request, sample.Tool, risk.Context{HourUTC: requestedAt.UTC().Hour()})
+	return sample, nil
+}
+
+func completePolicySimulationRun(ctx context.Context, tx pgx.Tx, run PolicySimulationRun, baselineBundle, proposedBundle PolicyBundle, samples []policySimulationReplaySample, completedAt time.Time) error {
+	const maxFindingDetails = 100
+	findingsList := []map[string]any{}
+	dangerousFindings := 0
+	findingDetailsTruncated := false
+	for _, sample := range samples {
+		baseline := policy.EvaluateBundleSimulation(sample.Request, sample.Tool, sample.Risk, policy.BundleSimulationConfig{
+			Version:  baselineBundle.Version,
+			Hash:     baselineBundle.PolicyHash,
+			Metadata: baselineBundle.Metadata,
+		})
+		proposed := policy.EvaluateBundleSimulation(sample.Request, sample.Tool, sample.Risk, policy.BundleSimulationConfig{
+			Version:  proposedBundle.Version,
+			Hash:     proposedBundle.PolicyHash,
+			Metadata: proposedBundle.Metadata,
+		})
+		comparison := policy.CompareDecisions(baseline, proposed)
+		if !comparison.Dangerous {
+			continue
+		}
+		dangerousFindings += len(comparison.Findings)
+		if len(findingsList) >= maxFindingDetails {
+			findingDetailsTruncated = true
+			continue
+		}
+		findingsList = append(findingsList, map[string]any{
+			"type":                    "DANGEROUS_POLICY_CHANGE",
+			"invocation_id":           sample.Request.InvocationID,
+			"tool_id":                 sample.Request.Tool.ID,
+			"action":                  sample.Request.Action,
+			"resource_type":           sample.Request.Resource.Type,
+			"resource_id":             sample.Request.Resource.ID,
+			"risk_score":              sample.Risk.Score,
+			"findings":                comparison.Findings,
+			"baseline_policy_version": baselineBundle.Version,
+			"baseline_policy_hash":    baselineBundle.PolicyHash,
+			"baseline_decision":       comparison.BaselineAction,
+			"baseline_decision_id":    comparison.BaselineID,
+			"proposed_policy_version": proposedBundle.Version,
+			"proposed_policy_hash":    proposedBundle.PolicyHash,
+			"proposed_decision":       comparison.ProposedAction,
+			"proposed_decision_id":    comparison.ProposedID,
+		})
+	}
+	findingsList = append([]map[string]any{{
+		"type":                       "SIMULATION_SUMMARY",
+		"baseline_policy_version":    baselineBundle.Version,
+		"baseline_policy_hash":       baselineBundle.PolicyHash,
+		"proposed_policy_version":    proposedBundle.Version,
+		"proposed_policy_hash":       proposedBundle.PolicyHash,
+		"sample_count":               len(samples),
+		"dangerous_findings":         dangerousFindings,
+		"finding_details_truncated":  findingDetailsTruncated,
+	}}, findingsList...)
+	findings, err := json.Marshal(findingsList)
 	if err != nil {
 		return fmt.Errorf("marshal policy simulation completion findings: %w", err)
 	}
@@ -1692,24 +1922,24 @@ func completePolicySimulationRun(ctx context.Context, tx pgx.Tx, run PolicySimul
 		update policy_simulation_runs
 		set state = 'SUCCEEDED',
 		    total_samples = $3,
-		    dangerous_findings = 0,
-		    findings = $4,
+		    dangerous_findings = $4,
+		    findings = $5,
 		    lease_owner = null,
 		    lease_until = null,
 		    last_error = null,
-		    updated_at = $5,
-		    completed_at = $5
+		    updated_at = $6,
+		    completed_at = $6
 		where tenant_id = $1
 		  and id = $2
 		  and state = 'RUNNING'
-	`, run.TenantID, run.ID, sampleCount, findings, completedAt)
+	`, run.TenantID, run.ID, len(samples), dangerousFindings, findings, completedAt)
 	if err != nil {
 		return fmt.Errorf("complete policy simulation run: %w", err)
 	}
 	if tag.RowsAffected() != 1 {
 		return errors.New("policy simulation run disappeared while completing")
 	}
-	return enqueuePolicySimulationTerminalEvent(ctx, tx, run, "PolicySimulationRunCompleted", "SUCCEEDED", sampleCount, 0, "", completedAt)
+	return enqueuePolicySimulationTerminalEvent(ctx, tx, run, "PolicySimulationRunCompleted", "SUCCEEDED", len(samples), dangerousFindings, "", completedAt)
 }
 
 func failPolicySimulationRun(ctx context.Context, tx pgx.Tx, run PolicySimulationRun, failedAt time.Time, baselineExists, proposedExists bool) error {

@@ -45,8 +45,8 @@ VALUES
         'candidate',
         'CANDIDATE',
         false,
-        'Candidate policy bundle for simulation demos.',
-        '{"policy_package":"aegis.authz","runtime":"opa_bundle"}'::jsonb,
+        'Candidate policy bundle for simulation demos. It raises the refund review threshold so replay can show an approval-to-allow change.',
+        '{"policy_package":"aegis.authz","runtime":"opa_bundle","approval_threshold_minor":10000000,"risk_approval_score":101}'::jsonb,
         'user_123'
     )
 ON CONFLICT (tenant_id, id) DO NOTHING;
@@ -150,6 +150,60 @@ VALUES (
     'demo-v1'
 )
 ON CONFLICT (tenant_id, tool_id, schema_version) DO NOTHING;
+
+INSERT INTO invocations (
+    tenant_id,
+    invocation_id,
+    protocol,
+    protocol_request_id,
+    idempotency_key,
+    subject_id,
+    agent_id,
+    delegation_id,
+    tool_id,
+    tool_schema_version,
+    tool_schema_hash,
+    action,
+    resource_type,
+    resource_id,
+    purpose,
+    canonical_request_hash,
+    redacted_arguments,
+    state,
+    decision,
+    reason_codes,
+    risk_score,
+    risk_engine_version,
+    created_at,
+    updated_at
+)
+VALUES (
+    'tenant_acme',
+    'inv_policy_replay_refund_001',
+    'rest',
+    'seed-policy-replay-001',
+    'seed-policy-replay-refund-001',
+    'user_123',
+    'agent_refund_assistant',
+    'dlg_789',
+    'payments.refund',
+    1,
+    'sha256:9d2231cc5f406f65b1f92959f938ef5edc39fcd3bb6fb9c60fbc77c7bc0ebf78',
+    'refund',
+    'customer',
+    'CUST-1042',
+    'customer_support',
+    'sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+    '{"customer_id":"CUST-1042","amount_minor":2000000,"currency":"INR","reason":"policy replay seed"}'::jsonb,
+    'PENDING_APPROVAL',
+    'REQUIRE_APPROVAL',
+    ARRAY['AMOUNT_REQUIRES_APPROVAL','HIGH_RISK_INVOCATION'],
+    78,
+    'risk-v1',
+    now() - interval '10 minutes',
+    now() - interval '10 minutes'
+)
+ON CONFLICT (tenant_id, invocation_id) DO NOTHING;
 
 INSERT INTO budgets (tenant_id, id, name, scope_type, scope_id, currency, limit_minor)
 VALUES ('tenant_acme', 'budget_refunds_july', 'July refund budget', 'agent', 'agent_refund_assistant', 'INR', 10000000)

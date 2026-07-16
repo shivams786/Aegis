@@ -56,7 +56,7 @@ curl -fsS "http://localhost:8080/v1/policy/simulations?tenant_id=tenant_acme"
 
 The gateway includes a deterministic local invocation engine for development and tests. Readiness fails closed if PostgreSQL is unavailable. When `AEGIS_AUTH_ENABLED=true`, protected routes such as `/v1/whoami`, `/v1/invocations`, and `/mcp` require a valid JWT.
 
-Seed data registers `local-policy-v1` as the active Acme bundle and a `candidate-demo` bundle for replay simulations. Policy bundle registration, activation, and simulation queueing are exposed through `/v1/policy/bundles` and `/v1/policy/simulations`; each mutation writes a redacted outbox event for asynchronous consumers.
+Seed data registers `local-policy-v1` as the active Acme bundle, a `candidate-demo` bundle that raises the refund review threshold, and one high-value refund sample for replay. Policy bundle registration, activation, and simulation queueing are exposed through `/v1/policy/bundles` and `/v1/policy/simulations`; each mutation writes a redacted outbox event for asynchronous consumers.
 
 ## MCP Client Configuration
 
@@ -112,4 +112,4 @@ The integration test expects `AEGIS_TEST_DATABASE_URL` or the `DATABASE_URL` Mak
 
 ## Current Limitations
 
-This is a deterministic local vertical slice, not yet a complete distributed production deployment. JWT validation, tenant-aware protected route wiring, runtime-selectable OPA policy evaluation, Redis-backed rate-limit checks, OpenBao-backed scoped credentials, local policy decisions, risk scoring, budget reservations, approvals, demo execution, idempotency, audit-chain verification, policy bundle registration, policy simulation summary completion, PostgreSQL outbox producers for API outcomes, NATS outbox publishing, and an admin UI source tree exist. PostgreSQL-backed persistence for every subsystem, full candidate-vs-baseline OPA replay, and complete Keycloak claim mapping still need hardening.
+This is a deterministic local vertical slice, not yet a complete distributed production deployment. JWT validation, tenant-aware protected route wiring, runtime-selectable OPA policy evaluation, Redis-backed rate-limit checks, OpenBao-backed scoped credentials, local policy decisions, risk scoring, budget reservations, approvals, demo execution, idempotency, audit-chain verification, policy bundle registration, metadata-driven policy replay, PostgreSQL outbox producers for API outcomes, NATS outbox publishing, and an admin UI source tree exist. PostgreSQL-backed persistence for every subsystem, execution of real OPA bundle artifacts during replay, and complete Keycloak claim mapping still need hardening.
