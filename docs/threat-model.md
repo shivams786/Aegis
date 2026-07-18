@@ -5,7 +5,7 @@ This model uses STRIDE categories and assumes a hostile multi-tenant environment
 ## Threat Actors
 
 - Malicious end user
-- Compromised AI agent
+- Compromised agent
 - Prompt-injected agent
 - Malicious MCP server
 - Compromised approver
@@ -37,8 +37,14 @@ Threats include oversized payloads, deeply nested JSON, policy-engine overload, 
 
 ## Elevation of Privilege
 
-Threats include delegation widening, requester self-approval, powerful users authorizing agent actions without delegation, tool substitution, and approval replay. Mitigations are explicit delegation validation, separation-of-duties rules, tool/schema hash binding, approval expiry, approval re-evaluation, and tests proving an agent cannot widen a grant.
+Threats include delegation widening, requester self-approval, privileged users authorizing agent actions without delegation, tool substitution, and approval replay. Mitigations are explicit delegation validation, separation-of-duties rules, tool/schema hash binding, approval expiry, approval re-evaluation, and tests proving an agent cannot widen a grant.
 
 ## Residual Risk
 
-The Milestone 0 code does not yet validate JWTs, call OPA from the gateway, execute tools, or issue credentials. Those risks are tracked in `PROGRESS.md` and are blockers before any production use.
+The local build now exercises the main authorization path: JWT validation, delegation checks, policy decisions, approvals, budgets, scoped credentials, execution, idempotency, audit, outbox delivery, and policy replay. The remaining production risks are narrower but still important:
+
+- Some runtime state still uses deterministic in-memory stores for the local demo.
+- Policy replay compares bundle metadata; replaying archived OPA bundle artifacts needs a dedicated adapter.
+- Development audit-root signatures are deterministic and should move to KMS-backed signing before external publication.
+- The Keycloak realm export still needs a complete deployment profile for Aegis-specific claims.
+- The Compose stack uses development credentials and is not suitable for shared or public environments.

@@ -51,7 +51,7 @@ func run() error {
 	go runBudgetReservationSweeper(ctx, logger, store, cfg.Worker.BudgetSweepInterval, storage.BudgetReservationSweepOptions{StaleAfter: cfg.Worker.BudgetReservationTTL, BatchSize: cfg.Worker.BudgetSweepBatchSize})
 	logger.Info("reconciliation lease worker ready", "reconciliation_interval", cfg.Worker.ReconciliationInterval.String(), "reconciliation_batch_size", cfg.Worker.ReconciliationBatchSize, "reconciliation_lease_duration", cfg.Worker.ReconciliationLeaseDuration.String(), "reconciliation_retry_after", cfg.Worker.ReconciliationRetryAfter.String(), "reconciliation_lease_owner", cfg.Worker.ReconciliationLeaseOwner)
 	go runReconciliationLeaser(ctx, logger, store, cfg.Worker.ReconciliationInterval, storage.ReconciliationLeaseOptions{LeaseOwner: cfg.Worker.ReconciliationLeaseOwner, LeaseDuration: cfg.Worker.ReconciliationLeaseDuration, RetryAfter: cfg.Worker.ReconciliationRetryAfter, BatchSize: cfg.Worker.ReconciliationBatchSize})
-	logger.Info("policy simulation worker ready", "policy_simulation_interval", cfg.Worker.PolicySimulationInterval.String(), "policy_simulation_batch_size", cfg.Worker.PolicySimulationBatchSize, "policy_simulation_lease_duration", cfg.Worker.PolicySimulationLeaseDuration.String(), "policy_simulation_retry_after", cfg.Worker.PolicySimulationRetryAfter.String(), "policy_simulation_lease_owner", cfg.Worker.PolicySimulationLeaseOwner)
+	logger.Info("policy replay worker ready", "policy_simulation_interval", cfg.Worker.PolicySimulationInterval.String(), "policy_simulation_batch_size", cfg.Worker.PolicySimulationBatchSize, "policy_simulation_lease_duration", cfg.Worker.PolicySimulationLeaseDuration.String(), "policy_simulation_retry_after", cfg.Worker.PolicySimulationRetryAfter.String(), "policy_simulation_lease_owner", cfg.Worker.PolicySimulationLeaseOwner)
 	go runPolicySimulationWorker(ctx, logger, store, cfg.Worker.PolicySimulationInterval, storage.PolicySimulationLeaseOptions{LeaseOwner: cfg.Worker.PolicySimulationLeaseOwner, LeaseDuration: cfg.Worker.PolicySimulationLeaseDuration, RetryAfter: cfg.Worker.PolicySimulationRetryAfter, BatchSize: cfg.Worker.PolicySimulationBatchSize})
 	logger.Info("audit root worker ready", "audit_root_interval", cfg.Worker.AuditRootInterval.String(), "audit_root_signer", cfg.Worker.AuditRootSigner)
 	runAuditRootGenerator(ctx, logger, store, cfg.Worker.AuditRootInterval, cfg.Worker.AuditRootSigner)
@@ -203,16 +203,16 @@ func runPolicySimulationWorker(ctx context.Context, logger *slog.Logger, store *
 	work := func() {
 		leaseResult, err := store.LeasePolicySimulationRuns(ctx, opts)
 		if err != nil {
-			logger.Error("policy simulation leasing failed", "error", err)
+			logger.Error("policy replay leasing failed", "error", err)
 			return
 		}
 		completeResult, err := store.CompleteLeasedPolicySimulationRuns(ctx, storage.PolicySimulationCompleteOptions{LeaseOwner: opts.LeaseOwner, BatchSize: opts.BatchSize})
 		if err != nil {
-			logger.Error("policy simulation completion failed", "error", err)
+			logger.Error("policy replay completion failed", "error", err)
 			return
 		}
 		if leaseResult.Leased > 0 || completeResult.Completed > 0 || completeResult.Failed > 0 {
-			logger.Info("policy simulation worker completed", "leased", leaseResult.Leased, "completed", completeResult.Completed, "failed", completeResult.Failed)
+			logger.Info("policy replay worker completed", "leased", leaseResult.Leased, "completed", completeResult.Completed, "failed", completeResult.Failed)
 		}
 	}
 	work()

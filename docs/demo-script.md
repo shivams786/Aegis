@@ -1,6 +1,6 @@
 # Demo Script
 
-## Milestone 0 Demo
+## Local Demo
 
 1. Start the stack:
 
@@ -31,13 +31,13 @@
 
 5. Open Grafana at `http://localhost:3000` and view the Aegis dashboard.
 
-6. Inspect seeded policy bundles and simulation runs:
+6. Inspect seeded policy bundles and replay runs:
 
    ```sh
    curl -fsS "http://localhost:8080/v1/policy/bundles?tenant_id=tenant_acme"
    curl -fsS "http://localhost:8080/v1/policy/simulations?tenant_id=tenant_acme"
    ```
 
-The seed data includes one high-value Acme refund sample. The `candidate-demo` policy bundle raises the refund review threshold, so a queued simulation has a concrete approval-to-allow change to report once the worker processes it.
+The seed data includes one high-value Acme refund sample. The `candidate-demo` policy bundle raises the refund review threshold, so a queued replay has a concrete approval-to-allow change to report after the worker processes it.
 
-The local engine now supports executable coverage for automatic allow, human approval, self-approval blocking, cross-tenant denial, idempotent replay, idempotency poisoning, strict budget reservations, messaging rate limits, policy simulation, audit tampering detection, credential-scope rejection, and unknown payment outcomes. The PowerShell demo exercises the first approval path; the Go tests exercise the deeper scenarios.
+The local engine now supports executable coverage for automatic allow, human approval, self-approval blocking, cross-tenant denial, idempotent replay, idempotency poisoning, strict budget reservations, messaging rate limits, policy replay, audit tampering detection, credential-scope rejection, and unknown payment outcomes. The PowerShell demo exercises the first approval path; the Go tests exercise the deeper scenarios.

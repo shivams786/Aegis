@@ -7,6 +7,7 @@ if (-not $crm) { $crm = "http://localhost:8092" }
 $messaging = $env:MESSAGING_MCP_URL
 if (-not $messaging) { $messaging = "http://localhost:8093" }
 
+Write-Host "Checking local MCP demo services"
 Invoke-RestMethod -Method Get -Uri "$payments/live" | ConvertTo-Json -Depth 10
 Invoke-RestMethod -Method Get -Uri "$crm/live" | ConvertTo-Json -Depth 10
 Invoke-RestMethod -Method Get -Uri "$messaging/live" | ConvertTo-Json -Depth 10
@@ -24,4 +25,5 @@ $refund = @{
   }
 } | ConvertTo-Json -Depth 20
 
+Write-Host "Calling payments.refund through the standalone payments MCP service"
 Invoke-RestMethod -Method Post -Uri $payments -ContentType "application/json" -Body $refund | ConvertTo-Json -Depth 20

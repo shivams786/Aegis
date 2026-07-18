@@ -5,10 +5,11 @@ Contributions should preserve Aegis security invariants and avoid weakening auth
 Before opening a change:
 
 ```sh
-gofmt -w $(find . -name '*.go' -not -path './vendor/*')
+go fmt ./...
 go test ./...
 go test -race ./...
 opa test policies
+npm --prefix admin run build
 ```
 
 For security-sensitive changes, include tests for the failure path as well as the success path. Do not introduce plaintext credentials into source, logs, traces, fixtures, or snapshots.

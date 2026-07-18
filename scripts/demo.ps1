@@ -5,7 +5,7 @@ if (-not $base) {
   $base = "http://localhost:8080"
 }
 
-Write-Host "Aegis demo against $base"
+Write-Host "Aegis local demo against $base"
 Invoke-RestMethod -Method Get -Uri "$base/live" | ConvertTo-Json -Depth 10
 Invoke-RestMethod -Method Get -Uri "$base/ready" | ConvertTo-Json -Depth 10
 
@@ -23,7 +23,7 @@ $lowRisk = @{
   arguments = @{ customer_id = "CUST-1042"; amount_minor = 50000; currency = "INR"; reason = "duplicate_charge" }
 } | ConvertTo-Json -Depth 20
 
-Write-Host "Scenario 1: low-risk refund"
+Write-Host "Scenario 1: small refund within the auto-approval threshold"
 Invoke-RestMethod -Method Post -Uri "$base/v1/invocations" -ContentType "application/json" -Body $lowRisk | ConvertTo-Json -Depth 20
 
 $highRisk = @{
@@ -40,7 +40,7 @@ $highRisk = @{
   arguments = @{ customer_id = "CUST-1042"; amount_minor = 5000000; currency = "INR"; reason = "duplicate_charge" }
 } | ConvertTo-Json -Depth 20
 
-Write-Host "Scenario 2: high-value refund approval"
+Write-Host "Scenario 2: high-value refund that waits for two finance approvals"
 $pending = Invoke-RestMethod -Method Post -Uri "$base/v1/invocations" -ContentType "application/json" -Body $highRisk
 $pending | ConvertTo-Json -Depth 20
 
@@ -49,5 +49,5 @@ $approval2 = @{ approver = @{ type = "approver"; id = "approver_finance_2"; grou
 Invoke-RestMethod -Method Post -Uri "$base/v1/approvals/$($pending.approval_request_id)/approve?tenant_id=tenant_acme" -ContentType "application/json" -Body $approval1 | ConvertTo-Json -Depth 20
 Invoke-RestMethod -Method Post -Uri "$base/v1/approvals/$($pending.approval_request_id)/approve?tenant_id=tenant_acme" -ContentType "application/json" -Body $approval2 | ConvertTo-Json -Depth 20
 
-Write-Host "Audit verification"
+Write-Host "Audit verification for tenant_acme"
 Invoke-RestMethod -Method Post -Uri "$base/v1/audit/verify?tenant_id=tenant_acme" | ConvertTo-Json -Depth 10

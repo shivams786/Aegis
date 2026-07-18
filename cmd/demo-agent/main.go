@@ -17,5 +17,5 @@ func main() {
 	}
 
 	fmt.Printf("demo agent configured for %s\n", *gateway)
-	fmt.Println("full MCP invocation scenarios are introduced after the secure invocation pipeline lands")
+	fmt.Println("use scripts/demo.ps1 for the approval flow, or point an MCP client at /mcp for tool calls through Aegis")
 }

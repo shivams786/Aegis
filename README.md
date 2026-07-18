@@ -1,26 +1,31 @@
-# Aegis - Security Control Plane for AI Agents
+# Aegis
 
-Aegis is a multi-tenant gateway that sits between AI agents and external tools. Its job is to make every tool invocation prove its authority instead of trusting a plausible agent request. The Milestone 0 slice in this repository starts the production shape: a Go gateway, PostgreSQL schema, dependency-aware health checks, structured logs, OpenTelemetry wiring, local Docker Compose stack, policy seed, and the first delegated-authorization domain tests.
+Aegis is a security control plane for AI-agent tool use. It sits between agents and downstream tools, turns each request into a tenant-scoped invocation, checks the caller's delegation, evaluates policy, handles approvals and budgets, issues a short-lived credential, executes the tool, and records what happened.
 
-## Architecture
+This repository is a local development build of that path. It includes a Go gateway, a worker, PostgreSQL schema, deterministic demo engine, OPA/Redis/OpenBao/NATS adapters, MCP demo services, audit verification, a small admin UI, and documentation for the security model. It is useful for review, demos, and tests; it is not a hardened production deployment yet.
+
+## How It Fits Together
 
 ```mermaid
 flowchart LR
-  client["AI Agent / MCP Client / REST Client"] --> gateway["Aegis Gateway"]
-  gateway --> authn["Authentication"]
-  authn --> delegation["Delegation Validation"]
-  delegation --> policy["OPA Decision"]
-  policy --> approval["Approval Engine"]
-  approval --> budget["Budget Ledger"]
-  budget --> creds["Credential Broker"]
-  creds --> tool["Downstream MCP Tool"]
-  gateway --> audit["Tamper-Evident Audit Log"]
-  gateway --> outbox["Transactional Outbox"]
+  client["Agent / MCP client / REST client"] --> gateway["Aegis gateway"]
+  gateway --> authn["JWT and tenant binding"]
+  authn --> delegation["Delegation check"]
+  delegation --> policy["Policy decision"]
+  policy --> approval["Approval gate"]
+  approval --> budget["Budget ledger"]
+  budget --> creds["Scoped credential"]
+  creds --> tool["Downstream tool"]
+  gateway --> audit["Audit chain"]
+  gateway --> outbox["Transactional outbox"]
+  outbox --> worker["Worker"]
 ```
 
-The data plane is the latency-sensitive path through the gateway. The control plane manages tools, policies, delegations, budgets, approvals, credentials, policy simulation runs, and audit exploration. Background workers drain the transactional outbox to NATS, expire stale approvals, release stale budget reservations, lease unknown-outcome invocations for reconciliation, lease and complete policy simulation summaries, and generate audit roots.
+The gateway is the request path. The worker handles work that should not sit on the request path: outbox delivery, approval expiry, stale budget reservation cleanup, reconciliation leasing, policy replay, and audit-root generation.
 
-## One-Command Local Startup
+The local engine uses fixed Acme demo identities and in-memory stores so the whole flow can run without external accounts. Runtime adapters can switch policy checks to OPA, rate limits to Redis, credentials to OpenBao, and event publication to NATS.
+
+## Local Startup
 
 ```sh
 make bootstrap
@@ -29,20 +34,18 @@ make migrate
 make seed
 ```
 
-The local stack includes PostgreSQL, Redis, NATS JetStream, OPA, Keycloak, OpenBao, OpenTelemetry Collector, Prometheus, Grafana, and the gateway.
+The Docker Compose stack includes PostgreSQL, Redis, NATS JetStream, OPA, Keycloak, OpenBao, OpenTelemetry Collector, Prometheus, Grafana, the gateway, and the worker.
 
-## Demo Credentials
-
-Development-only credentials are kept in `.env.example`:
+Development credentials live in `.env.example`:
 
 - PostgreSQL: `aegis` / `aegis_dev_password`
 - Keycloak admin: `admin` / `admin`
 - OpenBao dev token: `dev-root-token`
 - Grafana admin: `admin` / `admin`
 
-Never use these outside local development.
+These credentials are only for the local Compose environment. Do not reuse them on a shared or public system.
 
-## Curl Examples
+## Useful Calls
 
 ```sh
 curl -fsS http://localhost:8080/live
@@ -54,13 +57,34 @@ curl -fsS "http://localhost:8080/v1/policy/bundles?tenant_id=tenant_acme"
 curl -fsS "http://localhost:8080/v1/policy/simulations?tenant_id=tenant_acme"
 ```
 
-The gateway includes a deterministic local invocation engine for development and tests. Readiness fails closed if PostgreSQL is unavailable. When `AEGIS_AUTH_ENABLED=true`, protected routes such as `/v1/whoami`, `/v1/invocations`, and `/mcp` require a valid JWT.
+Protected routes require a valid JWT when `AEGIS_AUTH_ENABLED=true`. With auth disabled, the local demo uses `tenant_acme` unless a tenant is passed explicitly.
 
-Seed data registers `local-policy-v1` as the active Acme bundle, a `candidate-demo` bundle that raises the refund review threshold, and one high-value refund sample for replay. Policy bundle registration, activation, and simulation queueing are exposed through `/v1/policy/bundles` and `/v1/policy/simulations`; each mutation writes a redacted outbox event for asynchronous consumers.
+## Demo Flow
 
-## MCP Client Configuration
+Seed data sets up Acme Support:
 
-The Streamable HTTP MCP endpoint is reserved at:
+- Tenant: `tenant_acme`
+- Subject: `user_123`
+- Agent: `agent_refund_assistant`
+- Tool: `payments.refund`
+- Auto-refund delegation: `dlg_auto_refund`
+- Finance-review delegation: `dlg_789`
+- Approval threshold: Rs 10,000 (`1,000,000` paise)
+- Approvers: `approver_finance_1` and `approver_finance_2`
+
+Run the PowerShell demo after the stack is up:
+
+```sh
+make demo
+```
+
+The script submits a small refund, submits a high-value refund that waits for two finance approvals, applies both approvals, and verifies the audit chain.
+
+The seed also registers two policy bundles. `local-policy-v1` is active. `candidate-demo` raises the refund review threshold and is used by policy replay to show an approval-to-allow change against a seeded high-value refund sample.
+
+## MCP
+
+The gateway exposes Streamable HTTP MCP at:
 
 ```json
 {
@@ -75,41 +99,53 @@ The Streamable HTTP MCP endpoint is reserved at:
 }
 ```
 
-MCP `tools/list` and `tools/call` route through the same invocation pipeline as REST, including schema validation, delegation checks, policy decisions, approvals, idempotency, budget handling, credential scoping, execution, and audit.
-
-## Approval Walkthrough
-
-Seed data includes an Acme refund delegation with a maximum automatic amount of `1000000` paise. The initial Rego policy allows refunds at or below that threshold and requires two finance approvals above it. The approval API and state machine are implemented in Milestone 5.
-
-Run the local demo script after the gateway is up:
-
-```sh
-make demo
-```
-
-The script submits a low-risk refund, submits a high-value refund, applies two finance approvals, and verifies the audit chain.
+`tools/list` returns tools visible to the caller. `tools/call` re-enters the same invocation pipeline as REST: schema validation, delegation, policy, approvals, idempotency, budget checks, credential scoping, execution, and audit.
 
 ## Audit Verification
 
-The schema includes hash-chained `audit_events` and `audit_roots`. The `cmd/audit-verifier` binary can verify exported audit JSON offline, detect tampering, compare an expected root hash, and emit a root manifest:
+The schema stores hash-chained `audit_events` and periodic `audit_roots`. The verifier can check exported audit JSON offline:
 
 ```sh
 go run ./cmd/audit-verifier -file ./audit-events.json -tenant tenant_acme -root-out ./audit-root.json
 ```
 
-Without `-file`, the verifier keeps its deployment readiness behavior and checks PostgreSQL connectivity. See `docs/audit-verifier.md` for export formats and incident-response usage.
+Without `-file`, the verifier checks PostgreSQL connectivity using the same configuration as the gateway. See `docs/audit-verifier.md` for export formats and incident-response usage.
 
-## Test Commands
+## Checks
 
 ```sh
 make test
 make test-policy
 make test-race
 make test-integration
+make admin-build
 ```
 
 The integration test expects `AEGIS_TEST_DATABASE_URL` or the `DATABASE_URL` Makefile variable to point at a running PostgreSQL database.
 
-## Current Limitations
+## Current State
 
-This is a deterministic local vertical slice, not yet a complete distributed production deployment. JWT validation, tenant-aware protected route wiring, runtime-selectable OPA policy evaluation, Redis-backed rate-limit checks, OpenBao-backed scoped credentials, local policy decisions, risk scoring, budget reservations, approvals, demo execution, idempotency, audit-chain verification, policy bundle registration, metadata-driven policy replay, PostgreSQL outbox producers for API outcomes, NATS outbox publishing, and an admin UI source tree exist. PostgreSQL-backed persistence for every subsystem, execution of real OPA bundle artifacts during replay, and complete Keycloak claim mapping still need hardening.
+Working in this build:
+
+- JWT validation and tenant binding
+- Delegation validation
+- REST and MCP invocation paths
+- Local policy decisions and optional OPA evaluation
+- Approval requests and separation-of-duties checks
+- Budget reservation and release logic
+- Redis-backed strict rate limiting when configured
+- Scoped credentials through the local provider or OpenBao
+- Deterministic downstream demo execution
+- Idempotency conflict detection
+- Tamper-evident audit verification
+- Transactional outbox producers and NATS worker publishing
+- Policy bundle registration, activation, and metadata-driven replay
+- Admin UI source for operational inspection
+
+Still not production-hardened:
+
+- PostgreSQL is not yet the backing store for every runtime subsystem.
+- Policy replay compares metadata-driven bundle behavior; executing archived OPA bundle artifacts during replay still needs a dedicated adapter.
+- Keycloak realm mappers for Aegis-specific claims need a complete deployment profile.
+- Development audit-root signatures should move to KMS-backed signing before external publication.
+- The Compose stack is for local development, not a secure shared environment.

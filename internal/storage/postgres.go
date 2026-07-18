@@ -760,7 +760,7 @@ func (s *Store) CreatePolicySimulationRun(ctx context.Context, req PolicySimulat
 		return PolicySimulationRun{}, errors.New("postgres pool is not configured")
 	}
 	if req.TenantID == "" || req.BaselinePolicyVersion == "" || req.BaselinePolicyHash == "" || req.ProposedPolicyVersion == "" || req.ProposedPolicyHash == "" {
-		return PolicySimulationRun{}, errors.New("policy simulation tenant and policy identifiers are required")
+		return PolicySimulationRun{}, errors.New("policy replay tenant and policy identifiers are required")
 	}
 	if req.SampleScope == nil {
 		req.SampleScope = map[string]any{}
@@ -773,11 +773,11 @@ func (s *Store) CreatePolicySimulationRun(ctx context.Context, req PolicySimulat
 	}
 	sampleScope, err := json.Marshal(req.SampleScope)
 	if err != nil {
-		return PolicySimulationRun{}, fmt.Errorf("marshal policy simulation sample scope: %w", err)
+		return PolicySimulationRun{}, fmt.Errorf("marshal policy replay sample scope: %w", err)
 	}
 	traceContext, err := json.Marshal(req.TraceContext)
 	if err != nil {
-		return PolicySimulationRun{}, fmt.Errorf("marshal policy simulation trace context: %w", err)
+		return PolicySimulationRun{}, fmt.Errorf("marshal policy replay trace context: %w", err)
 	}
 	var run PolicySimulationRun
 	err = s.WithTenantTx(ctx, req.TenantID, func(ctx context.Context, tx pgx.Tx) error {
@@ -814,7 +814,7 @@ func (s *Store) CreatePolicySimulationRun(ctx context.Context, req PolicySimulat
 			          completed_at
 		`, req.TenantID, req.ID, req.RequestedBySubjectID, req.BaselinePolicyVersion, req.BaselinePolicyHash, req.ProposedPolicyVersion, req.ProposedPolicyHash, sampleScope))
 		if err != nil {
-			return fmt.Errorf("create policy simulation run: %w", err)
+			return fmt.Errorf("create policy replay run: %w", err)
 		}
 		payload, err := json.Marshal(map[string]any{
 			"simulation_id":             inserted.ID,
@@ -826,7 +826,7 @@ func (s *Store) CreatePolicySimulationRun(ctx context.Context, req PolicySimulat
 			"requested_by_subject_id":   inserted.RequestedBySubjectID,
 		})
 		if err != nil {
-			return fmt.Errorf("marshal policy simulation outbox payload: %w", err)
+			return fmt.Errorf("marshal policy replay outbox payload: %w", err)
 		}
 		_, err = tx.Exec(ctx, `
 			insert into outbox_events (
@@ -843,7 +843,7 @@ func (s *Store) CreatePolicySimulationRun(ctx context.Context, req PolicySimulat
 			on conflict (tenant_id, event_id) do nothing
 		`, inserted.TenantID, "evt_"+inserted.ID+"_PolicySimulationRunCreated", inserted.ID, inserted.CreatedAt.UnixNano(), payload, traceContext, inserted.CreatedAt)
 		if err != nil {
-			return fmt.Errorf("enqueue policy simulation creation event: %w", err)
+			return fmt.Errorf("enqueue policy replay creation event: %w", err)
 		}
 		run = inserted
 		return nil
@@ -890,7 +890,7 @@ func (s *Store) ListPolicySimulationRuns(ctx context.Context, tenantID string, l
 			limit $2
 		`, tenantID, limit)
 		if err != nil {
-			return fmt.Errorf("list policy simulation runs: %w", err)
+			return fmt.Errorf("list policy replay runs: %w", err)
 		}
 		defer rows.Close()
 		for rows.Next() {
@@ -901,7 +901,7 @@ func (s *Store) ListPolicySimulationRuns(ctx context.Context, tenantID string, l
 			runs = append(runs, run)
 		}
 		if err := rows.Err(); err != nil {
-			return fmt.Errorf("iterate policy simulation runs: %w", err)
+			return fmt.Errorf("iterate policy replay runs: %w", err)
 		}
 		return nil
 	})
@@ -944,7 +944,7 @@ func (s *Store) GetPolicySimulationRun(ctx context.Context, tenantID, runID stri
 		`, tenantID, runID))
 		if err != nil {
 			if errors.Is(err, pgx.ErrNoRows) {
-				return errors.New("policy simulation run not found")
+				return errors.New("policy replay run not found")
 			}
 			return err
 		}
@@ -989,16 +989,16 @@ func scanPolicySimulationRun(scanner rowScanner) (PolicySimulationRun, error) {
 		&run.UpdatedAt,
 		&completedAt,
 	); err != nil {
-		return PolicySimulationRun{}, fmt.Errorf("scan policy simulation run: %w", err)
+		return PolicySimulationRun{}, fmt.Errorf("scan policy replay run: %w", err)
 	}
 	sampleScope, err := decodeJSONMap(sampleScopeRaw)
 	if err != nil {
-		return PolicySimulationRun{}, fmt.Errorf("decode policy simulation sample scope: %w", err)
+		return PolicySimulationRun{}, fmt.Errorf("decode policy replay sample scope: %w", err)
 	}
 	var findings []any
 	if len(findingsRaw) > 0 {
 		if err := json.Unmarshal(findingsRaw, &findings); err != nil {
-			return PolicySimulationRun{}, fmt.Errorf("decode policy simulation findings: %w", err)
+			return PolicySimulationRun{}, fmt.Errorf("decode policy replay findings: %w", err)
 		}
 	}
 	if findings == nil {
@@ -1528,7 +1528,7 @@ func (s *Store) leaseTenantPolicySimulationRuns(ctx context.Context, tenantID, l
 		`, tenantID, now, leaseOwner, leaseUntil, notBefore, batchSize).Scan(&leased)
 	})
 	if err != nil {
-		return 0, fmt.Errorf("lease policy simulation runs: %w", err)
+		return 0, fmt.Errorf("lease policy replay runs: %w", err)
 	}
 	return leased, nil
 }
@@ -1594,7 +1594,7 @@ func (s *Store) completeTenantPolicySimulationRuns(ctx context.Context, tenantID
 			for update skip locked
 		`, tenantID, leaseOwner, now, batchSize)
 		if err != nil {
-			return fmt.Errorf("load leased policy simulation runs: %w", err)
+			return fmt.Errorf("load leased policy replay runs: %w", err)
 		}
 		defer rows.Close()
 		runs := []PolicySimulationRun{}
@@ -1606,7 +1606,7 @@ func (s *Store) completeTenantPolicySimulationRuns(ctx context.Context, tenantID
 			runs = append(runs, run)
 		}
 		if err := rows.Err(); err != nil {
-			return fmt.Errorf("iterate leased policy simulation runs: %w", err)
+			return fmt.Errorf("iterate leased policy replay runs: %w", err)
 		}
 		for _, run := range runs {
 			baselineBundle, baselineExists, err := loadPolicySimulationBundle(ctx, tx, tenantID, run.BaselinePolicyHash)
@@ -1636,7 +1636,7 @@ func (s *Store) completeTenantPolicySimulationRuns(ctx context.Context, tenantID
 		return nil
 	})
 	if err != nil {
-		return PolicySimulationCompleteResult{}, fmt.Errorf("complete policy simulation runs: %w", err)
+		return PolicySimulationCompleteResult{}, fmt.Errorf("complete policy replay runs: %w", err)
 	}
 	return result, nil
 }
@@ -1666,7 +1666,7 @@ func loadPolicySimulationBundle(ctx context.Context, tx pgx.Tx, tenantID, policy
 		if errors.Is(err, pgx.ErrNoRows) {
 			return PolicyBundle{}, false, nil
 		}
-		return PolicyBundle{}, false, fmt.Errorf("load policy simulation bundle: %w", err)
+		return PolicyBundle{}, false, fmt.Errorf("load policy replay bundle: %w", err)
 	}
 	return bundle, true, nil
 }
@@ -1738,7 +1738,7 @@ func loadPolicySimulationReplaySamples(ctx context.Context, tx pgx.Tx, tenantID 
 		limit $6
 	`, tenantID, policySimulationScopeString(scope, "tool_id"), policySimulationScopeString(scope, "action"), policySimulationScopeString(scope, "resource_type"), policySimulationScopeString(scope, "resource_id"), limit)
 	if err != nil {
-		return nil, fmt.Errorf("load policy simulation replay samples: %w", err)
+		return nil, fmt.Errorf("load policy replay samples: %w", err)
 	}
 	defer rows.Close()
 
@@ -1751,7 +1751,7 @@ func loadPolicySimulationReplaySamples(ctx context.Context, tx pgx.Tx, tenantID 
 		samples = append(samples, sample)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, fmt.Errorf("iterate policy simulation replay samples: %w", err)
+		return nil, fmt.Errorf("iterate policy replay samples: %w", err)
 	}
 	return samples, nil
 }
@@ -1813,30 +1813,30 @@ func scanPolicySimulationReplaySample(rows pgx.Rows) (policySimulationReplaySamp
 		&sample.Tool.AllowedNetworkDestination,
 		&sample.Tool.ConnectorVersion,
 	); err != nil {
-		return policySimulationReplaySample{}, fmt.Errorf("scan policy simulation replay sample: %w", err)
+		return policySimulationReplaySample{}, fmt.Errorf("scan policy replay sample: %w", err)
 	}
 	arguments, err := decodeJSONMap(argumentsRaw)
 	if err != nil {
-		return policySimulationReplaySample{}, fmt.Errorf("decode policy simulation sample arguments: %w", err)
+		return policySimulationReplaySample{}, fmt.Errorf("decode policy replay sample arguments: %w", err)
 	}
 	inputSchema, err := decodeJSONMap(inputSchemaRaw)
 	if err != nil {
-		return policySimulationReplaySample{}, fmt.Errorf("decode policy simulation input schema: %w", err)
+		return policySimulationReplaySample{}, fmt.Errorf("decode policy replay input schema: %w", err)
 	}
 	outputSchema, err := decodeJSONMap(outputSchemaRaw)
 	if err != nil {
-		return policySimulationReplaySample{}, fmt.Errorf("decode policy simulation output schema: %w", err)
+		return policySimulationReplaySample{}, fmt.Errorf("decode policy replay output schema: %w", err)
 	}
 	var retryPolicy tools.RetryPolicy
 	if len(retryPolicyRaw) > 0 {
 		if err := json.Unmarshal(retryPolicyRaw, &retryPolicy); err != nil {
-			return policySimulationReplaySample{}, fmt.Errorf("decode policy simulation retry policy: %w", err)
+			return policySimulationReplaySample{}, fmt.Errorf("decode policy replay retry policy: %w", err)
 		}
 	}
 	var approvalDefaults tools.ApprovalDefaults
 	if len(approvalDefaultsRaw) > 0 {
 		if err := json.Unmarshal(approvalDefaultsRaw, &approvalDefaults); err != nil {
-			return policySimulationReplaySample{}, fmt.Errorf("decode policy simulation approval defaults: %w", err)
+			return policySimulationReplaySample{}, fmt.Errorf("decode policy replay approval defaults: %w", err)
 		}
 	}
 	sample.Request.Subject.Type = authn.PrincipalType(subjectType)
@@ -1916,7 +1916,7 @@ func completePolicySimulationRun(ctx context.Context, tx pgx.Tx, run PolicySimul
 	}}, findingsList...)
 	findings, err := json.Marshal(findingsList)
 	if err != nil {
-		return fmt.Errorf("marshal policy simulation completion findings: %w", err)
+		return fmt.Errorf("marshal policy replay completion findings: %w", err)
 	}
 	tag, err := tx.Exec(ctx, `
 		update policy_simulation_runs
@@ -1934,10 +1934,10 @@ func completePolicySimulationRun(ctx context.Context, tx pgx.Tx, run PolicySimul
 		  and state = 'RUNNING'
 	`, run.TenantID, run.ID, len(samples), dangerousFindings, findings, completedAt)
 	if err != nil {
-		return fmt.Errorf("complete policy simulation run: %w", err)
+		return fmt.Errorf("complete policy replay run: %w", err)
 	}
 	if tag.RowsAffected() != 1 {
-		return errors.New("policy simulation run disappeared while completing")
+		return errors.New("policy replay run disappeared while completing")
 	}
 	return enqueuePolicySimulationTerminalEvent(ctx, tx, run, "PolicySimulationRunCompleted", "SUCCEEDED", len(samples), dangerousFindings, "", completedAt)
 }
@@ -1961,7 +1961,7 @@ func failPolicySimulationRun(ctx context.Context, tx pgx.Tx, run PolicySimulatio
 		},
 	})
 	if err != nil {
-		return fmt.Errorf("marshal policy simulation failure findings: %w", err)
+		return fmt.Errorf("marshal policy replay failure findings: %w", err)
 	}
 	tag, err := tx.Exec(ctx, `
 		update policy_simulation_runs
@@ -1979,10 +1979,10 @@ func failPolicySimulationRun(ctx context.Context, tx pgx.Tx, run PolicySimulatio
 		  and state = 'RUNNING'
 	`, run.TenantID, run.ID, findings, reason, failedAt)
 	if err != nil {
-		return fmt.Errorf("fail policy simulation run: %w", err)
+		return fmt.Errorf("fail policy replay run: %w", err)
 	}
 	if tag.RowsAffected() != 1 {
-		return errors.New("policy simulation run disappeared while failing")
+		return errors.New("policy replay run disappeared while failing")
 	}
 	return enqueuePolicySimulationTerminalEvent(ctx, tx, run, "PolicySimulationRunFailed", "FAILED", 0, 0, reason, failedAt)
 }
@@ -2000,7 +2000,7 @@ func enqueuePolicySimulationTerminalEvent(ctx context.Context, tx pgx.Tx, run Po
 		"last_error":                lastError,
 	})
 	if err != nil {
-		return fmt.Errorf("marshal policy simulation terminal payload: %w", err)
+		return fmt.Errorf("marshal policy replay terminal payload: %w", err)
 	}
 	_, err = tx.Exec(ctx, `
 		insert into outbox_events (
@@ -2017,7 +2017,7 @@ func enqueuePolicySimulationTerminalEvent(ctx context.Context, tx pgx.Tx, run Po
 		on conflict (tenant_id, event_id) do nothing
 	`, run.TenantID, fmt.Sprintf("evt_%s_%s_%d", run.ID, eventType, occurredAt.UnixNano()), run.ID, occurredAt.UnixNano(), eventType, payload, occurredAt)
 	if err != nil {
-		return fmt.Errorf("enqueue policy simulation terminal event: %w", err)
+		return fmt.Errorf("enqueue policy replay terminal event: %w", err)
 	}
 	return nil
 }

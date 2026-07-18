@@ -3,9 +3,11 @@ import { createRoot } from "react-dom/client";
 import { Check, Database, FileSearch, Gauge, Inbox, Play, RefreshCw, ShieldCheck, Wrench } from "lucide-react";
 import "./styles.css";
 
-type Tab = "approvals" | "invocations" | "simulator" | "tools" | "budgets" | "audit";
+type Tab = "approvals" | "invocations" | "replay" | "tools" | "budgets" | "audit";
 
 const apiBase = import.meta.env.VITE_AEGIS_API_BASE ?? "http://localhost:8080";
+const tenantID = "tenant_acme";
+const loadingText = "Loading from Aegis";
 
 function App() {
   const [tab, setTab] = useState<Tab>("approvals");
@@ -13,7 +15,7 @@ function App() {
     () => [
       ["approvals", Inbox, "Approvals"],
       ["invocations", FileSearch, "Invocations"],
-      ["simulator", Play, "Simulator"],
+      ["replay", Play, "Policy Replay"],
       ["tools", Wrench, "Tools"],
       ["budgets", Gauge, "Budgets"],
       ["audit", ShieldCheck, "Audit"]
@@ -35,10 +37,10 @@ function App() {
       </aside>
       <section>
         {tab === "approvals" && <Approvals />}
-        {tab === "invocations" && <JsonPanel title="Invocation Explorer" path="/v1/invocations/inv_000001?tenant_id=tenant_acme" />}
-        {tab === "simulator" && <Simulator />}
-        {tab === "tools" && <JsonPanel title="Tool Registry" path="/v1/tools?tenant_id=tenant_acme" />}
-        {tab === "budgets" && <StaticPanel title="Budget Usage" text="Budget ledger APIs are active in the gateway engine and are exposed through invocation outcomes in this build." />}
+        {tab === "invocations" && <JsonPanel title="Invocation Detail" path={`/v1/invocations/inv_000001?tenant_id=${tenantID}`} emptyText="No seeded invocation with this ID is available yet." />}
+        {tab === "replay" && <PolicyReplay />}
+        {tab === "tools" && <JsonPanel title="Tool Registry" path={`/v1/tools?tenant_id=${tenantID}`} emptyText="No tools are registered for this tenant." />}
+        {tab === "budgets" && <StaticPanel title="Budget Ledger" text="Budget reservations and releases are visible through invocation outcomes in this local build." />}
         {tab === "audit" && <Audit />}
       </section>
     </main>
@@ -46,32 +48,32 @@ function App() {
 }
 
 function Approvals() {
-  return <JsonPanel title="Approval Inbox" path="/v1/approvals?tenant_id=tenant_acme" />;
+  return <JsonPanel title="Approval Inbox" path={`/v1/approvals?tenant_id=${tenantID}`} emptyText="No approval requests are waiting for review." />;
 }
 
-function Simulator() {
-  const [simulations, setSimulations] = useState("Loading");
-  const [bundles, setBundles] = useState("Loading");
+function PolicyReplay() {
+  const [replayRuns, setReplayRuns] = useState(loadingText);
+  const [bundles, setBundles] = useState(loadingText);
 
   async function load() {
     try {
       const [bundleResponse, simulationResponse] = await Promise.all([
-        fetch(`${apiBase}/v1/policy/bundles?tenant_id=tenant_acme&limit=20`),
-        fetch(`${apiBase}/v1/policy/simulations?tenant_id=tenant_acme&limit=20`)
+        fetch(`${apiBase}/v1/policy/bundles?tenant_id=${tenantID}&limit=20`),
+        fetch(`${apiBase}/v1/policy/simulations?tenant_id=${tenantID}&limit=20`)
       ]);
-      setBundles(await bundleResponse.text());
-      setSimulations(await simulationResponse.text());
+      setBundles(await responseText(bundleResponse, "No policy bundles are registered yet."));
+      setReplayRuns(await responseText(simulationResponse, "No policy replay runs have been queued yet."));
     } catch (err) {
-      const message = String(err);
+      const message = `Could not reach Aegis at ${apiBase}: ${String(err)}`;
       setBundles(message);
-      setSimulations(message);
+      setReplayRuns(message);
     }
   }
 
   async function registerBundle() {
     const now = Date.now();
     const hashSuffix = now.toString(16).padStart(16, "0").slice(-16);
-    const response = await fetch(`${apiBase}/v1/policy/bundles?tenant_id=tenant_acme`, {
+    const response = await fetch(`${apiBase}/v1/policy/bundles?tenant_id=${tenantID}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -82,11 +84,11 @@ function Simulator() {
         metadata: { opa_package: "aegis.authz", registered_from: "admin" }
       })
     });
-    setBundles(await response.text());
+    setBundles(await responseText(response, "Candidate bundle registered."));
   }
 
   async function queueSimulation() {
-    const response = await fetch(`${apiBase}/v1/policy/simulations?tenant_id=tenant_acme`, {
+    const response = await fetch(`${apiBase}/v1/policy/simulations?tenant_id=${tenantID}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -97,7 +99,7 @@ function Simulator() {
         sample_scope: { tool_id: "payments.refund", sample_limit: 100 }
       })
     });
-    setSimulations(await response.text());
+    setReplayRuns(await responseText(response, "Policy replay queued."));
   }
 
   useEffect(() => {
@@ -106,15 +108,19 @@ function Simulator() {
 
   return (
     <div className="panel">
-      <h1>Policy Simulator</h1>
+      <div className="panel-header">
+        <p className="eyebrow">Tenant {tenantID}</p>
+        <h1>Policy Replay</h1>
+        <p className="muted">Compare the active local bundle with a candidate bundle against recent Acme refund samples.</p>
+      </div>
       <div className="toolbar">
-        <button className="primary" onClick={queueSimulation}><Play size={16} /> Queue</button>
-        <button className="secondary" onClick={registerBundle}><ShieldCheck size={16} /> Register Bundle</button>
+        <button className="primary" onClick={queueSimulation}><Play size={16} /> Queue Replay</button>
+        <button className="secondary" onClick={registerBundle}><ShieldCheck size={16} /> Register Candidate</button>
         <button className="secondary" onClick={load}><RefreshCw size={16} /> Refresh</button>
       </div>
       <div className="split">
-        <pre>{bundles}</pre>
-        <pre>{simulations}</pre>
+        <ResultBlock title="Policy Bundles" text={bundles} />
+        <ResultBlock title="Replay Runs" text={replayRuns} />
       </div>
     </div>
   );
@@ -123,8 +129,8 @@ function Simulator() {
 function Audit() {
   const [result, setResult] = useState<string>("");
   async function verify() {
-    const response = await fetch(`${apiBase}/v1/audit/verify?tenant_id=tenant_acme`, { method: "POST" });
-    setResult(await response.text());
+    const response = await fetch(`${apiBase}/v1/audit/verify?tenant_id=${tenantID}`, { method: "POST" });
+    setResult(await responseText(response, "Audit chain verified."));
   }
   return (
     <div className="panel">
@@ -137,18 +143,18 @@ function Audit() {
   );
 }
 
-function JsonPanel({ title, path }: { title: string; path: string }) {
-  const [text, setText] = useState("Loading");
+function JsonPanel({ title, path, emptyText }: { title: string; path: string; emptyText: string }) {
+  const [text, setText] = useState(loadingText);
   useEffect(() => {
     fetch(`${apiBase}${path}`)
-      .then((r) => r.text())
+      .then((r) => responseText(r, emptyText))
       .then(setText)
-      .catch((err) => setText(String(err)));
-  }, [path]);
+      .catch((err) => setText(`Could not reach Aegis at ${apiBase}: ${String(err)}`));
+  }, [emptyText, path]);
   return (
     <div className="panel">
       <h1>{title}</h1>
-      <pre>{text}</pre>
+      <ResultBlock title="Response" text={text} />
     </div>
   );
 }
@@ -160,6 +166,27 @@ function StaticPanel({ title, text }: { title: string; text: string }) {
       <p>{text}</p>
     </div>
   );
+}
+
+function ResultBlock({ title, text }: { title: string; text: string }) {
+  return (
+    <div>
+      <h2>{title}</h2>
+      <pre>{text}</pre>
+    </div>
+  );
+}
+
+async function responseText(response: Response, emptyText: string) {
+  const raw = await response.text();
+  if (!raw.trim()) {
+    return emptyText;
+  }
+  try {
+    return JSON.stringify(JSON.parse(raw), null, 2);
+  } catch {
+    return raw;
+  }
 }
 
 createRoot(document.getElementById("root")!).render(<App />);

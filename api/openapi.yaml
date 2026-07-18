@@ -2,7 +2,7 @@ openapi: 3.1.0
 info:
   title: Aegis Security Control Plane API
   version: 0.1.0
-  summary: Gateway, control-plane, and audit APIs for secure AI-agent tool invocation.
+  summary: Gateway, control-plane, and audit APIs for tenant-scoped agent tool invocation.
 servers:
   - url: http://localhost:8080
 paths:
@@ -51,7 +51,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/Problem"
         "501":
-          description: Reserved in Milestone 0 implementation.
+          description: Invocation engine is not configured for this process.
   /v1/whoami:
     get:
       summary: Return the authenticated Aegis acting identity.
@@ -81,7 +81,7 @@ paths:
         "404":
           description: Generic not found.
         "501":
-          description: Reserved in Milestone 0 implementation.
+          description: Invocation engine is not configured for this process.
   /v1/invocations/{invocation_id}/reconcile:
     post:
       summary: Reconcile an invocation with an unknown downstream outcome.
@@ -207,7 +207,7 @@ paths:
           description: PostgreSQL is unavailable.
   /v1/policy/simulations:
     get:
-      summary: List policy simulation replay runs.
+      summary: List policy replay runs.
       parameters:
         - name: limit
           in: query
@@ -221,11 +221,11 @@ paths:
             type: string
       responses:
         "200":
-          description: Policy simulation run list.
+          description: Policy replay run list.
         "503":
           description: PostgreSQL is unavailable.
     post:
-      summary: Queue a policy simulation replay run.
+      summary: Queue a policy replay run.
       parameters:
         - name: tenant_id
           in: query
@@ -239,14 +239,14 @@ paths:
               $ref: "#/components/schemas/PolicySimulationCreate"
       responses:
         "201":
-          description: Policy simulation run queued.
+          description: Policy replay run queued.
         "400":
-          description: Invalid policy simulation request.
+          description: Invalid policy replay request.
         "503":
           description: PostgreSQL is unavailable.
   /v1/policy/simulations/{simulation_id}:
     get:
-      summary: Read a policy simulation replay run.
+      summary: Read a policy replay run.
       parameters:
         - name: simulation_id
           in: path
@@ -259,9 +259,9 @@ paths:
             type: string
       responses:
         "200":
-          description: Policy simulation run.
+          description: Policy replay run.
         "404":
-          description: Simulation was not found.
+          description: Replay run was not found.
   /v1/tools:
     get:
       summary: List active tools available to the caller.

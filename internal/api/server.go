@@ -234,7 +234,7 @@ func (s *Server) submitInvocation(w http.ResponseWriter, r *http.Request) {
 	resp, err := s.engine.Submit(r.Context(), req)
 	if err != nil {
 		s.logger.Error("invocation failed", "error", err)
-		writeProblem(w, http.StatusInternalServerError, "internal_error", "invocation failed safely", "INVOCATION_FAILED")
+		writeProblem(w, http.StatusInternalServerError, "internal_error", "invocation could not be completed", "INVOCATION_FAILED")
 		return
 	}
 	status := http.StatusAccepted
@@ -418,7 +418,7 @@ func (s *Server) activatePolicyBundle(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) createPolicySimulation(w http.ResponseWriter, r *http.Request) {
 	if s.store == nil || s.store.Pool() == nil {
-		writeProblem(w, http.StatusServiceUnavailable, "dependency_unavailable", "policy simulation storage is unavailable", "POSTGRES_UNAVAILABLE")
+		writeProblem(w, http.StatusServiceUnavailable, "dependency_unavailable", "policy replay storage is unavailable", "POSTGRES_UNAVAILABLE")
 		return
 	}
 	var body storage.PolicySimulationRunCreate
@@ -433,8 +433,8 @@ func (s *Server) createPolicySimulation(w http.ResponseWriter, r *http.Request) 
 	body.TraceContext = map[string]any{"request_id": middleware.GetReqID(r.Context())}
 	run, err := s.store.CreatePolicySimulationRun(r.Context(), body)
 	if err != nil {
-		s.logger.Warn("create policy simulation failed", "error", err)
-		writeProblem(w, http.StatusBadRequest, "bad_request", "policy simulation request is invalid", "POLICY_SIMULATION_INVALID")
+		s.logger.Warn("create policy replay failed", "error", err)
+		writeProblem(w, http.StatusBadRequest, "bad_request", "policy replay request is invalid", "POLICY_SIMULATION_INVALID")
 		return
 	}
 	writeJSON(w, http.StatusCreated, run)
@@ -442,7 +442,7 @@ func (s *Server) createPolicySimulation(w http.ResponseWriter, r *http.Request) 
 
 func (s *Server) listPolicySimulations(w http.ResponseWriter, r *http.Request) {
 	if s.store == nil || s.store.Pool() == nil {
-		writeProblem(w, http.StatusServiceUnavailable, "dependency_unavailable", "policy simulation storage is unavailable", "POSTGRES_UNAVAILABLE")
+		writeProblem(w, http.StatusServiceUnavailable, "dependency_unavailable", "policy replay storage is unavailable", "POSTGRES_UNAVAILABLE")
 		return
 	}
 	limit := 50
@@ -456,8 +456,8 @@ func (s *Server) listPolicySimulations(w http.ResponseWriter, r *http.Request) {
 	}
 	runs, err := s.store.ListPolicySimulationRuns(r.Context(), tenantFromRequest(r), limit)
 	if err != nil {
-		s.logger.Warn("list policy simulations failed", "error", err)
-		writeProblem(w, http.StatusInternalServerError, "internal_error", "policy simulations could not be loaded", "POLICY_SIMULATION_LIST_FAILED")
+		s.logger.Warn("list policy replay runs failed", "error", err)
+		writeProblem(w, http.StatusInternalServerError, "internal_error", "policy replay runs could not be loaded", "POLICY_SIMULATION_LIST_FAILED")
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"simulations": runs})
@@ -465,7 +465,7 @@ func (s *Server) listPolicySimulations(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) getPolicySimulation(w http.ResponseWriter, r *http.Request) {
 	if s.store == nil || s.store.Pool() == nil {
-		writeProblem(w, http.StatusServiceUnavailable, "dependency_unavailable", "policy simulation storage is unavailable", "POSTGRES_UNAVAILABLE")
+		writeProblem(w, http.StatusServiceUnavailable, "dependency_unavailable", "policy replay storage is unavailable", "POSTGRES_UNAVAILABLE")
 		return
 	}
 	run, err := s.store.GetPolicySimulationRun(r.Context(), tenantFromRequest(r), chi.URLParam(r, "simulation_id"))
@@ -564,7 +564,7 @@ func (s *Server) protectedResourceMetadata(w http.ResponseWriter, r *http.Reques
 
 func (s *Server) notImplemented(reasonCode string) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
-		writeProblem(w, http.StatusNotImplemented, "not_implemented", "endpoint is reserved for the next milestone", reasonCode)
+		writeProblem(w, http.StatusNotImplemented, "not_implemented", "this endpoint is not wired in this process", reasonCode)
 	}
 }
 

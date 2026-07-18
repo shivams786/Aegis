@@ -6,6 +6,6 @@ PostgreSQL will need tenant-aware indexing, partitioning for audit and invocatio
 
 Redis clustering scales rate-limit throughput but strict financial budget correctness remains in PostgreSQL. Redis fallback is never used for financial correctness.
 
-Outbox workers, budget reservation sweepers, reconciliation workers, and policy simulation workers scale with `FOR UPDATE SKIP LOCKED` batch selection across tenant-scoped transactions. Consumers must be idempotent because delivery is at least once.
+Outbox workers, budget reservation sweepers, reconciliation workers, and policy replay workers scale with `FOR UPDATE SKIP LOCKED` batch selection across tenant-scoped transactions. Consumers must be idempotent because delivery is at least once.
 
 At 10x traffic, likely bottlenecks are PostgreSQL connection counts, OPA evaluation latency, audit append throughput, and approval queue reads. At 100x traffic, regional deployment introduces policy distribution lag, cross-region budget contention, and audit-root generation pressure.

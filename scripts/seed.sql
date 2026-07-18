@@ -45,7 +45,7 @@ VALUES
         'candidate',
         'CANDIDATE',
         false,
-        'Candidate policy bundle for simulation demos. It raises the refund review threshold so replay can show an approval-to-allow change.',
+        'Candidate policy bundle for local replay. It raises the refund review threshold so reviewers can see one approval-to-allow change.',
         '{"policy_package":"aegis.authz","runtime":"opa_bundle","approval_threshold_minor":10000000,"risk_approval_score":101}'::jsonb,
         'user_123'
     )

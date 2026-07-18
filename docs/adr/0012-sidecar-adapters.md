@@ -14,4 +14,4 @@ Add standard-library adapters for OPA Data API evaluation, OpenBao KV-scoped cre
 
 ## Consequences
 
-The project can evolve from local deterministic execution to sidecar-backed execution incrementally. The adapters are deliberately small and conservative; production hardening still needs authentication, pooling, retries, observability, persisted outbox producers for every durable mutation, and complete integration tests against Docker Compose.
+The project can evolve from local deterministic execution to sidecar-backed execution incrementally. The adapters are deliberately small and conservative; production hardening still needs stronger connection management, retry policy, credential rotation, deployment observability, persisted outbox producers for every durable mutation, and integration coverage against the full Compose stack.
